@@ -54,12 +54,18 @@ export interface SimulationState {
   commentary?: string // Gemini-generated plain English explanation
 }
 
+export interface FaultHistoryEntry {
+  timestamp: string
+  faults: { componentId: string; fault: FaultType; message: string }[]
+}
+
 // A saved circuit project stored in MongoDB
 export interface CircuitProject {
   _id?: string
   name: string
   graph: CircuitGraph
   simulationState?: SimulationState
+  faultHistory?: FaultHistoryEntry[]
   createdAt: Date
   updatedAt: Date
 }

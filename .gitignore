@@ -7,26 +7,50 @@ node_modules/
 dist/
 .next/
 out/
+build/
+*.tsbuildinfo
 
-# Environment files
+# Environment files (keep .env.example)
 .env
 .env.local
+.env.*.local
 .env.development.local
 .env.test.local
 .env.production.local
 
 # Logs
+logs/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
-# Editor
+# Editor / OS
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
 .vscode/
 .idea/
 
-# TypeScript
-*.tsbuildinfo
+# Testing / coverage
+coverage/
+.nyc_output/
+*.lcov
+.jest/
 
-# Uploads
+# Turbo / Vercel
+.turbo
+.vercel
+
+# Temp / cache
+.cache/
+tmp/
+temp/
+.tmp
+.temp
+
+# Uploads (user content)
 uploads/

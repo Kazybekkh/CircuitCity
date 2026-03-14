@@ -6,7 +6,6 @@ import TopNav from '../components/TopNav'
 import SchematicBuilder from '../components/SchematicBuilder'
 import ExplanationPanel from '../components/ExplanationPanel'
 
-// PixiJS must be loaded client-side only
 const CityView = dynamic(() => import('../components/CityView'), { ssr: false })
 
 export default function Home() {

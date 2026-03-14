@@ -10,7 +10,7 @@ const ComponentStateSchema = new Schema(
     currentFlow: { type: Number, required: true },
     fault: { type: String, enum: ['open_circuit', 'short_circuit', 'overload', 'missing_resistor', 'floating_ground'] },
   },
-  { _id: false }
+  { _id: false },
 )
 
 const FaultSchema = new Schema(
@@ -23,7 +23,7 @@ const FaultSchema = new Schema(
     },
     message: { type: String, required: true },
   },
-  { _id: false }
+  { _id: false },
 )
 
 const SimulationStateSchema = new Schema(
@@ -33,7 +33,15 @@ const SimulationStateSchema = new Schema(
     faults: [FaultSchema],
     commentary: { type: String },
   },
-  { _id: false }
+  { _id: false },
+)
+
+const FaultHistoryEntrySchema = new Schema(
+  {
+    timestamp: { type: String, required: true },
+    faults: [FaultSchema],
+  },
+  { _id: false },
 )
 
 const CircuitComponentSchema = new Schema(
@@ -51,7 +59,7 @@ const CircuitComponentSchema = new Schema(
       y: { type: Number, required: true },
     },
   },
-  { _id: false }
+  { _id: false },
 )
 
 const CircuitEdgeSchema = new Schema(
@@ -62,7 +70,7 @@ const CircuitEdgeSchema = new Schema(
     sourcePin: { type: String },
     targetPin: { type: String },
   },
-  { _id: false }
+  { _id: false },
 )
 
 const CircuitProjectSchema = new Schema<CircuitProjectDocument>(
@@ -73,13 +81,12 @@ const CircuitProjectSchema = new Schema<CircuitProjectDocument>(
       edges: [CircuitEdgeSchema],
     },
     simulationState: SimulationStateSchema,
+    faultHistory: [FaultHistoryEntrySchema],
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true },
 )
 
 export const CircuitProjectModel = mongoose.model<CircuitProjectDocument>(
   'CircuitProject',
-  CircuitProjectSchema
+  CircuitProjectSchema,
 )

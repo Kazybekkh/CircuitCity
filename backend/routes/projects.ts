@@ -16,7 +16,18 @@ router.get('/', async (_req: Request, res: Response) => {
 // POST /api/projects
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const project = new CircuitProjectModel(req.body)
+    const { name, graph, simulationState } = req.body
+
+    const faultEntry = simulationState?.faults?.length
+      ? { timestamp: new Date().toISOString(), faults: simulationState.faults }
+      : null
+
+    const project = new CircuitProjectModel({
+      name,
+      graph,
+      simulationState,
+      faultHistory: faultEntry ? [faultEntry] : [],
+    })
     const saved = await project.save()
     res.status(201).json(saved)
   } catch {
@@ -28,13 +39,36 @@ router.post('/', async (req: Request, res: Response) => {
 router.get('/:id', async (req: Request, res: Response) => {
   try {
     const project = await CircuitProjectModel.findById(req.params.id)
-    if (!project) {
-      res.status(404).json({ error: 'Project not found' })
-      return
-    }
+    if (!project) { res.status(404).json({ error: 'Project not found' }); return }
     res.json(project)
   } catch {
     res.status(404).json({ error: 'Project not found' })
+  }
+})
+
+// PUT /api/projects/:id
+router.put('/:id', async (req: Request, res: Response) => {
+  try {
+    const { name, graph, simulationState } = req.body
+    const update: Record<string, unknown> = {}
+    if (name !== undefined) update.name = name
+    if (graph !== undefined) update.graph = graph
+    if (simulationState !== undefined) update.simulationState = simulationState
+
+    const pushOp: Record<string, unknown> = {}
+    if (simulationState?.faults?.length) {
+      pushOp.faultHistory = { timestamp: new Date().toISOString(), faults: simulationState.faults }
+    }
+
+    const project = await CircuitProjectModel.findByIdAndUpdate(
+      req.params.id,
+      { $set: update, ...(Object.keys(pushOp).length ? { $push: pushOp } : {}) },
+      { new: true },
+    )
+    if (!project) { res.status(404).json({ error: 'Project not found' }); return }
+    res.json(project)
+  } catch {
+    res.status(400).json({ error: 'Failed to update project' })
   }
 })
 

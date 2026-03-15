@@ -107,8 +107,8 @@ export function parseSpiceText(text: string): CircuitGraph {
     edges.push({ id: `e${edges.length}`, sourceId: a, targetId: b })
   }
 
-  for (const [nodeId, compIds] of nodeToComps) {
-    if (compIds.length < 2) continue
+  nodeToComps.forEach((compIds, nodeId) => {
+    if (compIds.length < 2) return
     if (nodeId === '__ground__') {
       // Each non-ground component connects directly to GND
       for (const cid of compIds) {
@@ -118,7 +118,7 @@ export function parseSpiceText(text: string): CircuitGraph {
       // Chain components sharing a non-ground node
       for (let i = 0; i < compIds.length - 1; i++) addEdge(compIds[i], compIds[i + 1])
     }
-  }
+  })
 
   // Auto-layout: BFS from battery then left-to-right
   layoutComponents(components, edges)

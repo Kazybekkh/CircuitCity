@@ -4,25 +4,34 @@ import dynamic from 'next/dynamic'
 import { useCircuitStore } from '../store/circuitStore'
 import TopNav from '../components/TopNav'
 import SchematicBuilder from '../components/SchematicBuilder'
-import ExplanationPanel from '../components/ExplanationPanel'
 
 const QuestView = dynamic(() => import('../components/QuestView'), { ssr: false })
+const VoiceAgent = dynamic(() => import('../components/VoiceAgent'), { ssr: false })
 
 export default function Home() {
   const { activeMode, simulationState } = useCircuitStore()
 
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
+    <div className="flex flex-col h-screen text-white overflow-hidden" style={{ background: '#0a0e1a' }}>
       {/* Top Navigation */}
       <TopNav />
 
-      {/* Main Three-Panel Layout */}
+      {/* Main Two-Panel Layout */}
       <main className="flex flex-1 overflow-hidden">
         {/* Left Panel — Schematic Builder (30%) */}
-        <section className="w-[30%] flex flex-col border-r border-gray-700">
-          <div className="px-4 py-2 bg-gray-800 border-b border-gray-700">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Schematic Builder
+        <section className="w-[30%] flex flex-col" style={{ borderRight: '2px solid #1e293b' }}>
+          <div style={{
+            padding: '6px 12px',
+            background: '#0f172a',
+            borderBottom: '2px solid #1e293b',
+          }}>
+            <h2 style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 8,
+              color: '#64748b',
+              letterSpacing: '0.1em',
+            }}>
+              🔧 SCHEMATIC BUILDER
             </h2>
           </div>
           <div className="flex-1 overflow-hidden">
@@ -30,49 +39,62 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Centre Panel — Quest View (40%) */}
-        <section className="w-[40%] flex flex-col border-r border-gray-700">
-          <div className="px-4 py-2 bg-gray-800 border-b border-gray-700">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Quest World
+        {/* Right Panel — Quest View (70%) */}
+        <section className="w-[70%] flex flex-col relative">
+          <div style={{
+            padding: '6px 12px',
+            background: '#0f172a',
+            borderBottom: '2px solid #1e293b',
+          }}>
+            <h2 style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 8,
+              color: '#64748b',
+              letterSpacing: '0.1em',
+            }}>
+              🗺️ QUEST WORLD
             </h2>
           </div>
-          <div className="flex-1 overflow-hidden" style={{ background: '#0F0E17' }}>
+          <div className="flex-1 overflow-hidden relative" style={{ background: '#0F0E17' }}>
             <QuestView />
-          </div>
-        </section>
-
-        {/* Right Panel — Explanation (30%) */}
-        <section className="w-[30%] flex flex-col">
-          <div className="px-4 py-2 bg-gray-800 border-b border-gray-700">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Explanation
-            </h2>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <ExplanationPanel />
+            <VoiceAgent />
           </div>
         </section>
       </main>
 
       {/* Bottom Status Bar */}
-      <footer className="flex items-center justify-between bg-gray-900 border-t border-gray-700 px-6 py-1.5 text-xs text-gray-400">
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-green-400 inline-block" />
-          <span>Connected</span>
+      <footer style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: '#0a0e1a',
+        borderTop: '2px solid #1e293b',
+        padding: '4px 16px',
+        fontFamily: "'Press Start 2P', monospace",
+        fontSize: 7,
+        color: '#475569',
+        boxShadow: '0 -2px 0 #000',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: '#22c55e', display: 'inline-block',
+            boxShadow: '0 0 4px #22c55e',
+          }} />
+          <span>ONLINE</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span>
-            Mode:{' '}
-            <span className="text-cyan-400 capitalize font-medium">
+            MODE:{' '}
+            <span style={{ color: '#ffd700', textTransform: 'uppercase' }}>
               {activeMode}
             </span>
           </span>
-          <span className="text-gray-500">|</span>
-          <span>
+          <span style={{ color: '#1e293b' }}>│</span>
+          <span style={{ color: simulationState?.faults?.length ? '#ef4444' : '#22c55e' }}>
             {simulationState?.faults?.length
-              ? `${simulationState.faults.length} fault(s) detected`
-              : 'No faults detected'}
+              ? `${simulationState.faults.length} FAULT${simulationState.faults.length > 1 ? 'S' : ''}`
+              : 'ALL CLEAR'}
           </span>
         </div>
       </footer>

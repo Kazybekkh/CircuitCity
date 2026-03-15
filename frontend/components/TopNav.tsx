@@ -8,11 +8,8 @@ import { CircuitProject } from '../../shared/types'
 type Mode = 'build' | 'upload' | 'learn' | 'debug' | 'challenge'
 
 const MODES: { id: Mode; label: string }[] = [
-  { id: 'build', label: 'Build' },
-  { id: 'upload', label: 'Upload' },
-  { id: 'learn', label: 'Learn' },
-  { id: 'debug', label: 'Debug' },
-  { id: 'challenge', label: 'Challenge' },
+  { id: 'build', label: '⚡ Build' },
+  { id: 'upload', label: '📤 Upload' },
 ]
 
 export default function TopNav() {
@@ -68,20 +65,55 @@ export default function TopNav() {
   }
 
   return (
-    <nav className="relative flex items-center justify-between bg-gray-900 text-white px-6 py-3 border-b border-gray-700">
-      <h1 className="text-lg font-bold tracking-wide text-cyan-400">Circuits as a City</h1>
+    <nav className="relative flex items-center justify-between text-white px-4 py-2"
+      style={{
+        background: '#0a0e1a',
+        borderBottom: '2px solid #1e293b',
+        boxShadow: '0 2px 0 #000',
+      }}
+    >
+      <h1
+        style={{
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 12,
+          color: '#ffd700',
+          letterSpacing: '0.05em',
+          textShadow: '2px 2px 0 #4a3500',
+        }}
+      >
+        ⚡ GROUND WIRE
+      </h1>
 
       {/* mode tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-1">
         {MODES.map(mode => (
           <button
             key={mode.id}
             onClick={() => setActiveMode(mode.id)}
-            className={`px-4 py-1.5 rounded text-sm font-medium transition-colors ${
-              activeMode === mode.id
-                ? 'bg-cyan-500 text-white'
-                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-            }`}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 8,
+              padding: '6px 10px',
+              border: activeMode === mode.id ? '2px solid #ffd700' : '2px solid #334155',
+              borderRadius: 2,
+              background: activeMode === mode.id ? '#1a1500' : '#0f172a',
+              color: activeMode === mode.id ? '#ffd700' : '#94a3b8',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+              textShadow: activeMode === mode.id ? '0 0 6px #ffd700' : 'none',
+            }}
+            onMouseEnter={e => {
+              if (activeMode !== mode.id) {
+                e.currentTarget.style.borderColor = '#64748b'
+                e.currentTarget.style.color = '#e2e8f0'
+              }
+            }}
+            onMouseLeave={e => {
+              if (activeMode !== mode.id) {
+                e.currentTarget.style.borderColor = '#334155'
+                e.currentTarget.style.color = '#94a3b8'
+              }
+            }}
           >
             {mode.label}
           </button>
@@ -89,43 +121,69 @@ export default function TopNav() {
       </div>
 
       {/* project actions */}
-      <div className="flex items-center gap-2">
-        <button
-          onClick={clearCircuit}
-          className="px-3 py-1.5 rounded text-xs font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
-        >
-          New
-        </button>
-        <button
-          onClick={handleSave}
-          disabled={saving || circuitGraph.components.length === 0}
-          className="px-3 py-1.5 rounded text-xs font-medium bg-cyan-700 text-white hover:bg-cyan-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-        <button
-          onClick={handleLoadToggle}
-          disabled={loadingProjects}
-          className="px-3 py-1.5 rounded text-xs font-medium bg-gray-700 text-gray-300 hover:bg-gray-600 disabled:opacity-40 transition-colors"
-        >
-          {loadingProjects ? 'Loading...' : 'Load'}
-        </button>
+      <div className="flex items-center gap-1">
+        {[
+          { label: '🆕 New', onClick: clearCircuit, disabled: false },
+          { label: '💾 Save', onClick: handleSave, disabled: saving || circuitGraph.components.length === 0 },
+          { label: saving ? '⏳...' : '📂 Load', onClick: handleLoadToggle, disabled: loadingProjects },
+        ].map((btn, i) => (
+          <button
+            key={i}
+            onClick={btn.onClick}
+            disabled={btn.disabled}
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              fontSize: 7,
+              padding: '5px 8px',
+              border: '2px solid #334155',
+              borderRadius: 2,
+              background: '#0f172a',
+              color: btn.disabled ? '#475569' : '#94a3b8',
+              cursor: btn.disabled ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { if (!btn.disabled) { e.currentTarget.style.color = '#ffd700'; e.currentTarget.style.borderColor = '#ffd700' } }}
+            onMouseLeave={e => { e.currentTarget.style.color = btn.disabled ? '#475569' : '#94a3b8'; e.currentTarget.style.borderColor = '#334155' }}
+          >
+            {btn.label}
+          </button>
+        ))}
       </div>
 
       {/* load dropdown */}
       {loadOpen && (
-        <div className="absolute right-6 top-full mt-1 w-72 bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto">
+        <div
+          className="absolute right-4 top-full mt-1 w-72 z-50 max-h-64 overflow-y-auto"
+          style={{
+            background: '#0f172a',
+            border: '2px solid #334155',
+            borderRadius: 4,
+            boxShadow: '4px 4px 0 rgba(0,0,0,0.5)',
+          }}
+        >
           {projects.length === 0 ? (
-            <p className="text-xs text-gray-400 p-3 text-center">No saved projects</p>
+            <p style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 7, color: '#64748b', padding: 12, textAlign: 'center' }}>
+              NO SAVED PROJECTS
+            </p>
           ) : (
             projects.map(proj => (
               <button
                 key={proj._id}
                 onClick={() => handleLoadProject(proj)}
-                className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-700 transition-colors border-b border-gray-700 last:border-0"
+                className="w-full text-left transition-colors"
+                style={{
+                  padding: '8px 12px',
+                  borderBottom: '1px solid #1e293b',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                }}
+                onMouseEnter={e => e.currentTarget.style.background = '#1e293b'}
+                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
               >
-                <span className="font-medium text-white">{proj.name}</span>
-                <span className="block text-[10px] text-gray-400 mt-0.5">
+                <span style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 8, color: '#e2e8f0' }}>
+                  {proj.name}
+                </span>
+                <span style={{ display: 'block', fontFamily: "'VT323', monospace", fontSize: 14, color: '#64748b', marginTop: 2 }}>
                   {proj.graph.components.length} components &middot;{' '}
                   {new Date(proj.updatedAt).toLocaleDateString()}
                 </span>

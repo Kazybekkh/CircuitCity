@@ -34,8 +34,10 @@ export default function ExplanationPanel() {
           <p className="text-xs text-gray-400 capitalize">Type: {selectedComp.type}</p>
           {selectedComp.value !== undefined && (
             <p className="text-xs text-gray-400">
-              Value: {selectedComp.value}
-              {selectedComp.type === 'battery' ? 'V' : selectedComp.type === 'resistor' ? '\u03A9' : selectedComp.type === 'capacitor' ? '\u00B5F' : ''}
+              Value: {selectedComp.type === 'battery' || selectedComp.type === 'resistor'
+                ? Number(selectedComp.value).toFixed(1)
+                : selectedComp.value}
+              {selectedComp.type === 'battery' ? ' V' : selectedComp.type === 'resistor' ? ' Ω' : selectedComp.type === 'capacitor' ? ' µF' : ''}
             </p>
           )}
           {selectedState && (

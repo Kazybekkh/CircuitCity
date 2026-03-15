@@ -1,12 +1,13 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useCircuitStore } from '../store/circuitStore'
-import type { CircuitGraph, SimulationState, FaultType } from '../../shared/types'
+import type { CircuitGraph, SimulationState, FaultType, ComponentType } from '../../shared/types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const WORLD_W = 3200
-const WORLD_H = 1600
+const WORLD_W = 1600
+const WORLD_H = 800
+const STORY_PAUSE_MS = 4000 // 4 second pause at each landmark
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type BiomeType = 'forest' | 'dungeon' | 'desert' | 'arctic' | 'lava' | 'void'
@@ -16,6 +17,7 @@ interface LandmarkData {
   type: string
   label: string
   value?: number
+  voltageDrop?: number // for resistors: estimated V drop (e.g. −2.5 V)
   x: number
   y: number
   powered: boolean
@@ -29,6 +31,9 @@ interface SceneData {
   landmarks: LandmarkData[]
   heroSpeed: number
   isEmpty: boolean
+  circuitContext: { vBat: number; rTotal: number; current: number }
+  edges: { sourceId: string; targetId: string }[]
+  isClosedCircuit: boolean
 }
 
 interface PathPt {
@@ -45,10 +50,22 @@ interface Particle {
   color: number
 }
 
+// ─── Chat log entry (for the overlay) ─────────────────────────────────────────
+interface ChatEntry {
+  id: number
+  text: string
+  type: 'story' | 'fault' | 'system'
+  timestamp: number
+}
+
 interface PixiState {
   app: any
   world: any
   heroContainer: any
+  heroFrames: any[]
+  heroFrameIdx: number
+  heroFrameTimer: number
+  speechBubbleContainer: any
   dayNightOverlay: any
   pathContainer: any
   landmarksContainer: any
@@ -63,6 +80,62 @@ interface PixiState {
   elapsed: number
   animTick: number
   particles: Particle[]
+  visitedLandmarks: Set<string>
+  currentStoryLandmark: string | null
+  skipRequested: boolean
+  voltageDropPopup: { text: string; yOffset: number; ageMs: number } | null
+  voltageDropPopupContainer: any
+  heroIntroShown: boolean
+}
+
+// ─── Physics stories ──────────────────────────────────────────────────────────
+function getPhysicsStory(
+  type: string, label: string, value?: number,
+  fault?: FaultType | null, powered?: boolean,
+  voltageDrop?: number,
+  circuitContext?: { vBat: number; rTotal: number; current: number },
+): string {
+  if (fault === 'short_circuit') return `⚠️ SHORT CIRCUIT at ${label}!\nAll current rushes through with no resistance.\nDangerous overload! I = V / 0 → ∞\nR must never be zero — fuse will blow!`
+  if (fault === 'open_circuit') return `🔌 OPEN CIRCUIT at ${label}!\nThe path is broken here.\nNo current can flow through this gap.\nR = ∞, I = V/∞ = 0A`
+  if (fault === 'missing_resistor') return `⚠️ MISSING RESISTOR!\n${label} needs current protection.\nWithout R: I = V/0 → ∞ → burnout!\nAdd a resistor in series!`
+
+  switch (type) {
+    case 'battery': {
+      const v = value != null ? Number(value).toFixed(1) : '?'
+      const iLine = circuitContext && circuitContext.rTotal > 0
+        ? `\nI = ε/R = ${v}V / ${circuitContext.rTotal}Ω = ${(circuitContext.current * 1000).toFixed(1)}mA`
+        : ''
+      return `⚡ POWER SOURCE — ${label}\nVoltage: ε = ${v}V (EMF)\nPushes electrons like water pressure.\nKirchhoff: ΣV around loop = 0${iLine}`
+    }
+    case 'resistor': {
+      const r = value != null ? (value >= 1000 ? `${(value / 1000).toFixed(1)}kΩ` : `${Number(value).toFixed(0)}Ω`) : '?Ω'
+      const vDrop = voltageDrop != null ? `V_drop = ${Number(voltageDrop).toFixed(2)}V` : ''
+      const pDiss = circuitContext && circuitContext.current > 0 && value != null
+        ? `P = I²R = ${(circuitContext.current * 1000).toFixed(1)}mA² × ${value}Ω = ${(circuitContext.current * circuitContext.current * value * 1000).toFixed(2)}mW`
+        : ''
+      return `🔥 RESISTOR — ${label} (${r})\nV = I × R (Ohm's Law)\n${vDrop}${vDrop && pDiss ? '\n' : ''}${pDiss}\nConverts electrical energy → heat.`
+    }
+    case 'led':
+      return powered
+        ? `💡 LED — ${label} GLOWING!\nForward voltage V_f ≈ 2.0–3.5V\nCurrent → photon emission\nE = h × f = hc/λ\nTypical: λ_red≈625nm, λ_green≈530nm`
+        : `💡 LED — ${label} is dark.\nNeeds forward bias to emit light.\nV_f ≈ 2.0V minimum, check your path!\nNo current → no photons → no light.`
+    case 'capacitor': {
+      const c = value != null ? `${value}µF` : '?µF'
+      return `🔋 CAPACITOR — ${label} (${c})\nStores charge: Q = C × V\nStored energy: E = ½CV²\nActs as: short at high freq,\nopen at DC (steady state).\nI = C × dV/dt`
+    }
+    case 'switch':
+      return value === 1
+        ? `🚪 SWITCH — ${label} CLOSED\nConducting: R_on ≈ 0Ω\nCurrent flows freely.\nDouble-click to open!`
+        : `🚪 SWITCH — ${label} OPEN\nBlocking: R_off = ∞Ω\nI = V/∞ = 0A — no current.\nDouble-click to close!`
+    case 'ground':
+      return `⏚ GROUND — ${label}\nReference potential: V = 0V\nKirchhoff's Current Law:\nΣI_in = ΣI_out at every node.\nAll current returns here.`
+    case 'motor':
+      return powered
+        ? `⚙️ MOTOR — ${label} SPINNING!\nP_mech = η × V × I\nTorque: τ = K_t × I\nBack-EMF: V_back = K_e × ω\nElectrical energy → mechanical work`
+        : `⚙️ MOTOR — ${label} idle.\nNeeds current to produce torque.\nτ = K_t × I — check your path!`
+    default:
+      return `📍 JUNCTION — ${label}\nNode in circuit topology.\nKirchhoff: ΣI = 0 at each node.`
+  }
 }
 
 // ─── Biome palettes ───────────────────────────────────────────────────────────
@@ -101,8 +174,9 @@ function seededRng(seed: number): () => number {
 // ─── Scene derivation ─────────────────────────────────────────────────────────
 function deriveScene(graph: CircuitGraph, sim: SimulationState | null): SceneData {
   const comps = graph.components
+  const emptyCtx = { vBat: 0, rTotal: 1, current: 0 }
   if (comps.length === 0) {
-    return { biome: 'forest', landmarks: [], heroSpeed: 60, isEmpty: true }
+    return { biome: 'forest', landmarks: [], heroSpeed: 150, isEmpty: true, circuitContext: emptyCtx, edges: [], isClosedCircuit: false }
   }
 
   const faultTypes = sim?.faults.map(f => f.fault) ?? []
@@ -117,18 +191,47 @@ function deriveScene(graph: CircuitGraph, sim: SimulationState | null): SceneDat
     if (avg < 0.15) biome = 'arctic'
   }
 
-  const count = comps.length
-  const X_START = 350, X_END = WORLD_W - 350, Y_MID = WORLD_H / 2
+  // ── Map canvas positions → world space (preserves layout) ──────────────────
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const c of comps) {
+    minX = Math.min(minX, c.position.x); minY = Math.min(minY, c.position.y)
+    maxX = Math.max(maxX, c.position.x); maxY = Math.max(maxY, c.position.y)
+  }
+  const MARGIN_X = 180, MARGIN_Y = 160
+  const USABLE_W = WORLD_W - MARGIN_X * 2  // 1240
+  const USABLE_H = WORLD_H - MARGIN_Y * 2  // 480
+  const rangeX = Math.max(maxX - minX, 1)
+  const rangeY = Math.max(maxY - minY, 1)
+  const scale = Math.min(USABLE_W / rangeX, USABLE_H / rangeY)
+  const scaledW = rangeX * scale
+  const scaledH = rangeY * scale
+  const worldOffsetX = MARGIN_X + (USABLE_W - scaledW) / 2
+  const worldOffsetY = MARGIN_Y + (USABLE_H - scaledH) / 2
+  const toWorldX = (cx: number) => worldOffsetX + (cx - minX) * scale
+  const toWorldY = (cy: number) => worldOffsetY + (cy - minY) * scale
 
-  const landmarks: LandmarkData[] = comps.map((comp, i) => {
-    const t = count === 1 ? 0.5 : i / (count - 1)
-    const x = X_START + t * (X_END - X_START)
-    const y = Y_MID + Math.sin(t * Math.PI * 3) * 200 + Math.cos(t * Math.PI * 1.5) * 100
+  // Compute circuit physics: voltage drops, series current
+  const battery = comps.find(c => c.type === 'battery')
+  const vBat = battery?.value ?? 6
+  const resistors = comps.filter(c => c.type === 'resistor')
+  const rTotal = resistors.reduce((s, c) => s + (c.value ?? 0), 0) || 1
+  const seriesCurrent = vBat / rTotal
+  const voltageDrops = new Map<string, number>()
+  resistors.forEach(r => {
+    const ri = r.value ?? 0
+    if (ri > 0) voltageDrops.set(r.id, (vBat * ri) / rTotal)
+  })
+  const circuitContext = { vBat, rTotal, current: seriesCurrent }
+
+  const landmarks: LandmarkData[] = comps.map(comp => {
+    const x = toWorldX(comp.position.x)
+    const y = toWorldY(comp.position.y)
     const cs = sim?.componentStates.find(s => s.componentId === comp.id)
     const fault = sim?.faults.find(f => f.componentId === comp.id)?.fault ?? null
+    const voltageDrop = comp.type === 'resistor' ? voltageDrops.get(comp.id) : undefined
     return {
       id: comp.id, type: comp.type, label: comp.label ?? comp.type,
-      value: comp.value, x, y,
+      value: comp.value, voltageDrop, x, y,
       powered: cs?.powered ?? false,
       currentFlow: cs?.currentFlow ?? 0,
       fault,
@@ -136,22 +239,89 @@ function deriveScene(graph: CircuitGraph, sim: SimulationState | null): SceneDat
     }
   })
 
+  // Is the circuit closed? Battery and ground must both be powered, no short circuit.
+  const battComp = comps.find(c => c.type === 'battery')
+  const gndComp  = comps.find(c => c.type === 'ground')
+  const battPowered = battComp ? (sim?.componentStates.find(cs => cs.componentId === battComp.id)?.powered ?? false) : false
+  const gndPowered  = gndComp  ? (sim?.componentStates.find(cs => cs.componentId === gndComp.id)?.powered  ?? false) : false
+  const hasShort = faultTypes.includes('short_circuit')
+  const isClosedCircuit = battPowered && gndPowered && !hasShort
+
   const maxFlow = Math.max(0.05, ...landmarks.map(l => l.currentFlow))
-  const heroSpeed = 60 + maxFlow * 160
-  return { biome, landmarks, heroSpeed, isEmpty: false }
+  const heroSpeed = 80 + maxFlow * 100
+  const sceneEdges = graph.edges.map(e => ({ sourceId: e.sourceId, targetId: e.targetId }))
+  return { biome, landmarks, heroSpeed, isEmpty: false, circuitContext, edges: sceneEdges, isClosedCircuit }
 }
 
-// ─── Path ─────────────────────────────────────────────────────────────────────
-function buildHeroPath(landmarks: LandmarkData[]): PathPt[] {
+// ─── Path: follows actual circuit edges, mirroring the canvas layout ──────────
+function buildHeroPath(landmarks: LandmarkData[], edges: { sourceId: string; targetId: string }[]): PathPt[] {
   if (landmarks.length === 0) return [{ x: WORLD_W / 2, y: WORLD_H / 2 }]
-  const pts: PathPt[] = landmarks.map(lm => ({
-    x: lm.x, y: lm.y, landmarkId: lm.id,
-    isCapacitor: lm.type === 'capacitor',
-    resistanceScale: lm.type === 'resistor'
-      ? Math.max(0.2, 1 / (1 + (lm.value ?? 100) / 500))
-      : 1,
-  }))
-  pts.push({ x: pts[0].x, y: pts[0].y })
+  if (landmarks.length === 1) {
+    const lm = landmarks[0]
+    return [{ x: lm.x, y: lm.y, landmarkId: lm.id }, { x: lm.x, y: lm.y }]
+  }
+
+  const lmMap = new Map(landmarks.map(l => [l.id, l]))
+
+  // Build undirected adjacency from circuit edges
+  const adj = new Map<string, string[]>()
+  for (const lm of landmarks) adj.set(lm.id, [])
+  for (const e of edges) {
+    if (lmMap.has(e.sourceId) && lmMap.has(e.targetId)) {
+      adj.get(e.sourceId)!.push(e.targetId)
+      adj.get(e.targetId)!.push(e.sourceId)
+    }
+  }
+
+  // DFS from battery (or most-connected node) to get traversal order
+  const startId = (landmarks.find(l => l.type === 'battery')
+    ?? landmarks.reduce((best, lm) => (adj.get(lm.id)?.length ?? 0) > (adj.get(best.id)?.length ?? 0) ? lm : best)
+  ).id
+
+  const visited = new Set<string>()
+  const orderedIds: string[] = []
+  const dfs = (id: string) => {
+    if (visited.has(id)) return
+    visited.add(id)
+    orderedIds.push(id)
+    for (const nid of adj.get(id) ?? []) {
+      if (!visited.has(nid)) dfs(nid)
+    }
+  }
+  dfs(startId)
+  // Append any disconnected landmarks
+  for (const lm of landmarks) { if (!visited.has(lm.id)) orderedIds.push(lm.id) }
+
+  const orderedLms = orderedIds.map(id => lmMap.get(id)!).filter(Boolean)
+
+  // Build path with orthogonal waypoints between components
+  const pts: PathPt[] = []
+  for (let i = 0; i < orderedLms.length; i++) {
+    const lm = orderedLms[i]
+    const meta: Partial<PathPt> = {
+      landmarkId: lm.id,
+      isCapacitor: lm.type === 'capacitor',
+      resistanceScale: lm.type === 'resistor' ? Math.max(0.3, 1 / (1 + (lm.value ?? 100) / 500)) : 1,
+    }
+    if (i > 0) {
+      const prev = orderedLms[i - 1]
+      // Orthogonal turn if needed (matches ReactFlow wire routing: horizontal → vertical)
+      if (Math.abs(lm.x - prev.x) > 30 && Math.abs(lm.y - prev.y) > 30) {
+        pts.push({ x: lm.x, y: prev.y })
+      }
+    }
+    pts.push({ x: lm.x, y: lm.y, ...meta })
+  }
+
+  // Close the loop back to start
+  const first = orderedLms[0], last = orderedLms[orderedLms.length - 1]
+  if (Math.abs(last.x - first.x) > 20 || Math.abs(last.y - first.y) > 20) {
+    if (Math.abs(last.x - first.x) > 30 && Math.abs(last.y - first.y) > 30) {
+      pts.push({ x: first.x, y: last.y })
+    }
+    pts.push({ x: first.x, y: first.y })
+  }
+
   return pts
 }
 
@@ -196,49 +366,27 @@ function drawTiles(PIXI: any, container: any, biome: BiomeType): void {
       const x = rng() * WORLD_W, y = rng() * WORLD_H
       g.ellipse(x, y, 80 + rng() * 100, 18 + rng() * 30).fill({ color: 0x7a5c30, alpha: 0.4 })
     }
-    for (let i = 0; i < 30; i++) {
-      const x = rng() * WORLD_W, y = rng() * WORLD_H
-      g.rect(x, y - 30, 8, 30).fill(0x2a5c1a)
-      g.rect(x - 16, y - 18, 16, 6).fill(0x2a5c1a)
-      g.rect(x + 8, y - 14, 16, 6).fill(0x2a5c1a)
-    }
   } else if (biome === 'arctic') {
     for (let i = 0; i < 80; i++) {
       const x = rng() * WORLD_W, y = rng() * WORLD_H, h2 = 15 + rng() * 30
       g.poly([x, y - h2, x + h2 / 3, y, x, y + 4, x - h2 / 3, y])
         .fill({ color: 0x88ccee, alpha: 0.3 })
     }
-    for (let i = 0; i < 40; i++) {
-      const x = rng() * WORLD_W, y = rng() * WORLD_H
-      g.ellipse(x, y, 40 + rng() * 60, 10 + rng() * 15).fill({ color: 0xddeeff, alpha: 0.25 })
-    }
   } else if (biome === 'lava') {
     for (let i = 0; i < 60; i++) {
       const x = rng() * WORLD_W, y = rng() * WORLD_H
       g.ellipse(x, y, 20 + rng() * 50, 8 + rng() * 20).fill({ color: 0xdd2200, alpha: 0.4 })
-    }
-    for (let i = 0; i < 50; i++) {
-      const x = rng() * WORLD_W, y = rng() * WORLD_H, s = 10 + rng() * 20
-      g.rect(x, y, s, s * 0.7).fill(0x1a0818)
     }
   } else if (biome === 'void') {
     for (let i = 0; i < 70; i++) {
       const x = rng() * WORLD_W, y = rng() * WORLD_H, s = 4 + rng() * 12
       g.rect(x, y, s, s).fill({ color: 0x3a1a5a, alpha: 0.6 })
     }
-    for (let i = 0; i < 30; i++) {
-      const x1 = rng() * WORLD_W, y1 = rng() * WORLD_H
-      const len = 30 + rng() * 80, angle = rng() * Math.PI * 2
-      g.moveTo(x1, y1)
-        .lineTo(x1 + Math.cos(angle) * len, y1 + Math.sin(angle) * len)
-        .stroke({ color: 0x2a0a4a, width: 2 })
-    }
   }
-
   container.addChild(g)
 }
 
-// ─── Path line ────────────────────────────────────────────────────────────────
+// ─── Path line (orthogonal circuit traces) ────────────────────────────────────
 function drawPathLine(PIXI: any, container: any, pts: PathPt[], biome: BiomeType): void {
   container.removeChildren()
   if (pts.length < 2) return
@@ -247,12 +395,12 @@ function drawPathLine(PIXI: any, container: any, pts: PathPt[], biome: BiomeType
 
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1]
-    g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ color: pal.pathColor, width: 30, alpha: 0.7 })
+    g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ color: pal.pathColor, width: 24, alpha: 0.7 })
   }
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1]
     const dist = Math.hypot(b.x - a.x, b.y - a.y)
-    const steps = Math.floor(dist / 22)
+    const steps = Math.floor(dist / 18)
     for (let s = 0; s < steps; s += 2) {
       const t0 = s / steps, t1 = (s + 1) / steps
       g.moveTo(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0)
@@ -260,162 +408,181 @@ function drawPathLine(PIXI: any, container: any, pts: PathPt[], biome: BiomeType
         .stroke({ color: 0xffd700, width: 2, alpha: 0.5 })
     }
   }
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i]
+    if (!p.landmarkId) g.circle(p.x, p.y, 5).fill({ color: 0xffd700, alpha: 0.6 })
+  }
   container.addChild(g)
 }
 
-// ─── Value formatter ──────────────────────────────────────────────────────────
+// ─── Value formatter (schematic style: one decimal for V/Ω like "6.0 V", "2.0 Ω") ─
 function fmtValue(type: string, value: number): string {
-  if (type === 'resistor') return value >= 1000 ? `${(value / 1000).toFixed(1)}kΩ` : `${value}Ω`
+  if (type === 'resistor') return value >= 1000 ? `${(value / 1000).toFixed(1)}kΩ` : `${Number(value).toFixed(1)}Ω`
   if (type === 'capacitor') return value < 0.001 ? `${(value * 1e6).toFixed(0)}μF` : `${value}F`
-  if (type === 'battery') return `${value}V`
+  if (type === 'battery') return `${Number(value).toFixed(1)}V`
   return `${value}`
 }
 
-// ─── Landmark graphics ────────────────────────────────────────────────────────
+// ─── Landmark graphics (PHYSICS SCHEMATIC SYMBOLS) ────────────────────────────
 function drawLandmark(PIXI: any, lm: LandmarkData): any {
   const c = new PIXI.Container()
   c.x = lm.x
   c.y = lm.y
   c.label = lm.id
-  const g = new PIXI.Graphics()
   const col = LANDMARK_COL[lm.type] ?? LANDMARK_COL.wire
   const lit = lm.powered
+  const strokeCol = lit ? col.glow : 0xcccccc
+  const SW = 3  // stroke width
+
+  // Background circle glow
+  const bg = new PIXI.Graphics()
+  if (lit) {
+    bg.circle(0, 0, 50).fill({ color: col.glow, alpha: 0.08 })
+  }
+  c.addChild(bg)
+
+  const g = new PIXI.Graphics()
 
   switch (lm.type) {
     case 'battery': {
-      g.rect(-32, 12, 64, 18).fill(col.secondary)
-      g.rect(-28, 6, 56, 8).fill(col.primary)
-      g.rect(-24, -10, 48, 18).fill(col.primary)
-      g.rect(-30, -44, 8, 38).fill(col.secondary)
-      g.rect(22, -44, 8, 38).fill(col.secondary)
-      g.rect(-30, -48, 60, 8).fill(col.primary)
-      if (lit) {
-        for (let s = -20; s <= 20; s += 12) {
-          g.rect(s - 2, -64, 4, 20).fill(col.glow)
-        }
-        g.circle(0, -52, 16).fill({ color: col.glow, alpha: 0.15 })
-      }
+      // Standard battery symbol: long/short plates
+      g.moveTo(-40, 0).lineTo(-14, 0).stroke({ color: strokeCol, width: SW })
+      // Long plate (positive)
+      g.moveTo(-14, -22).lineTo(-14, 22).stroke({ color: strokeCol, width: SW + 2 })
+      // Short plate (negative)
+      g.moveTo(-4, -12).lineTo(-4, 12).stroke({ color: strokeCol, width: SW })
+      // Long plate 2
+      g.moveTo(6, -22).lineTo(6, 22).stroke({ color: strokeCol, width: SW + 2 })
+      // Short plate 2
+      g.moveTo(16, -12).lineTo(16, 12).stroke({ color: strokeCol, width: SW })
+      // Right lead
+      g.moveTo(16, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
       break
     }
     case 'resistor': {
-      const sw = lm.fault ? 0x444444 : col.primary
-      g.ellipse(0, 10, 46, 22).fill({ color: sw, alpha: 0.9 })
-      g.ellipse(-15, 0, 26, 14).fill({ color: col.secondary, alpha: 0.85 })
-      g.ellipse(15, 2, 22, 13).fill({ color: col.secondary, alpha: 0.85 })
-      g.ellipse(-8, -8, 12, 8).fill({ color: 0x1a0a00, alpha: 0.6 })
-      g.ellipse(10, -6, 10, 7).fill({ color: 0x1a0a00, alpha: 0.6 })
-      if (lit) {
-        g.circle(-15, -5, 6).fill(0xff2222)
-        g.circle(15, -5, 6).fill(0xff2222)
-      } else {
-        g.circle(-15, -5, 5).fill(0x440000)
-        g.circle(15, -5, 5).fill(0x440000)
-      }
+      // IEC rectangle style
+      g.moveTo(-40, 0).lineTo(-22, 0).stroke({ color: strokeCol, width: SW })
+      g.rect(-22, -12, 44, 24).stroke({ color: strokeCol, width: SW })
+      if (lit) g.rect(-22, -12, 44, 24).fill({ color: col.glow, alpha: 0.08 })
+      g.moveTo(22, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
       break
     }
     case 'capacitor': {
-      g.rect(-34, -50, 68, 75).fill(col.secondary)
-      g.rect(-30, -46, 60, 67).fill(0x080818)
-      for (let bx = -24; bx <= 24; bx += 12) {
-        g.rect(bx - 3, -44, 6, 62).fill(col.primary)
+      // Two parallel plates
+      g.moveTo(-40, 0).lineTo(-6, 0).stroke({ color: strokeCol, width: SW })
+      g.moveTo(-6, -22).lineTo(-6, 22).stroke({ color: strokeCol, width: SW + 2 })
+      g.moveTo(6, -22).lineTo(6, 22).stroke({ color: strokeCol, width: SW + 2 })
+      g.moveTo(6, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
+      if (lit) {
+        g.rect(-6, -22, 12, 44).fill({ color: col.glow, alpha: 0.1 })
       }
-      if (lit) g.rect(-28, -42, 56, 58).fill({ color: col.glow, alpha: 0.18 })
-      g.rect(-8, 8, 16, 12).fill(0x888888)
-      g.circle(0, 14, 4).fill(0x444444)
       break
     }
     case 'led': {
-      g.poly([-32, 16, -22, 22, 22, 22, 32, 16, 22, 4, -22, 4]).fill(0x5a5050)
-      g.rect(-20, 4, 8, 18).fill(0x4a2800)
-      g.rect(10, 4, 8, 18).fill(0x4a2800)
-      g.rect(-6, 8, 12, 14).fill(0x3a2000)
+      // Diode triangle + bar + light arrows
+      g.moveTo(-40, 0).lineTo(-16, 0).stroke({ color: strokeCol, width: SW })
+      // Triangle (anode)
+      g.poly([-16, -16, -16, 16, 10, 0]).fill({ color: lit ? 0xff8800 : 0x333333, alpha: lit ? 0.5 : 0.3 })
+      g.poly([-16, -16, -16, 16, 10, 0]).stroke({ color: strokeCol, width: SW })
+      // Bar (cathode)
+      g.moveTo(10, -16).lineTo(10, 16).stroke({ color: strokeCol, width: SW + 1 })
+      g.moveTo(10, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
+      // Light arrows (pointing up-right)
       if (lit) {
-        g.poly([0, -32, -9, -12, 0, -6, 9, -12]).fill(0xff8800)
-        g.poly([0, -26, -5, -10, 0, -4, 5, -10]).fill(0xffee00)
-        g.poly([-12, -20, -18, -4, -9, 0, -4, -10]).fill(0xff4400)
-        g.poly([12, -20, 18, -4, 9, 0, 4, -10]).fill(0xff4400)
-        g.circle(0, -20, 22).fill({ color: 0xff8800, alpha: 0.12 })
-      } else {
-        g.poly([0, -10, -4, -2, 0, 0, 4, -2]).fill(0x442200)
+        g.moveTo(14, -18).lineTo(22, -26).stroke({ color: 0xffdd00, width: 2 })
+        g.poly([20, -28, 24, -24, 18, -24]).fill(0xffdd00)
+        g.moveTo(20, -12).lineTo(28, -20).stroke({ color: 0xffdd00, width: 2 })
+        g.poly([26, -22, 30, -18, 24, -18]).fill(0xffdd00)
       }
       break
     }
     case 'switch': {
-      g.rect(-42, -45, 20, 65).fill(0x606060)
-      g.rect(-46, -50, 28, 10).fill(0x808080)
-      g.rect(22, -45, 20, 65).fill(0x606060)
-      g.rect(18, -50, 28, 10).fill(0x808080)
+      // Two dots with a lever
+      g.moveTo(-40, 0).lineTo(-16, 0).stroke({ color: strokeCol, width: SW })
+      g.circle(-16, 0, 4).fill(strokeCol)
+      g.circle(16, 0, 4).fill(strokeCol)
       if (lm.isClosed) {
-        g.rect(-22, -8, 44, 18).fill(col.primary)
-        g.moveTo(-22, -8).lineTo(22, -8).stroke({ color: 0x999999, width: 2 })
+        // Closed — flat line
+        g.moveTo(-16, 0).lineTo(16, 0).stroke({ color: strokeCol, width: SW })
       } else {
-        g.rect(-22, -28, 20, 16).fill(col.secondary)
-        g.rect(2, -28, 20, 16).fill(col.secondary)
-        g.moveTo(-12, -28).lineTo(-22, -45).stroke({ color: 0x707070, width: 3 })
-        g.moveTo(12, -28).lineTo(22, -45).stroke({ color: 0x707070, width: 3 })
+        // Open — angled lever
+        g.moveTo(-16, 0).lineTo(14, -16).stroke({ color: strokeCol, width: SW })
       }
+      g.moveTo(16, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
       break
     }
     case 'ground': {
-      g.circle(0, 0, 36).fill({ color: col.secondary, alpha: 0.8 })
-      g.circle(0, 0, 28).fill({ color: col.primary, alpha: 0.9 })
-      g.circle(0, 0, 18).fill({ color: 0x000000, alpha: 0.7 })
-      g.circle(0, 0, 10).fill({ color: col.glow, alpha: lit ? 0.95 : 0.3 })
-      g.circle(0, 0, 4).fill(lit ? 0xffffff : 0x330033)
-      if (lit) {
-        for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
-          g.moveTo(Math.cos(a) * 20, Math.sin(a) * 20)
-            .lineTo(Math.cos(a) * 40, Math.sin(a) * 40)
-            .stroke({ color: col.glow, width: 2 })
-        }
-      }
+      // Three horizontal bars of decreasing width
+      g.moveTo(0, -30).lineTo(0, -6).stroke({ color: strokeCol, width: SW })
+      g.moveTo(-24, -6).lineTo(24, -6).stroke({ color: strokeCol, width: SW + 2 })
+      g.moveTo(-16, 4).lineTo(16, 4).stroke({ color: strokeCol, width: SW })
+      g.moveTo(-8, 14).lineTo(8, 14).stroke({ color: strokeCol, width: SW })
+      g.moveTo(-2, 22).lineTo(2, 22).stroke({ color: strokeCol, width: SW - 1 })
       break
     }
     case 'motor': {
-      const fc = lit ? col.primary : col.secondary
-      g.rect(-30, -38, 60, 58).fill(fc)
-      g.rect(-22, -30, 16, 16).fill(lit ? 0xffdd88 : 0x222222)
-      g.rect(6, -30, 16, 16).fill(lit ? 0xffdd88 : 0x222222)
-      g.rect(-22, -10, 16, 14).fill(lit ? 0xffcc44 : 0x222222)
-      g.rect(6, -10, 16, 14).fill(lit ? 0xffcc44 : 0x222222)
-      g.rect(-12, -58, 10, 22).fill(0x444444)
-      g.rect(4, -52, 10, 16).fill(0x444444)
-      if (lit) {
-        g.ellipse(-7, -58, 8, 6).fill({ color: 0x888888, alpha: 0.5 })
-        g.ellipse(9, -52, 6, 5).fill({ color: 0x888888, alpha: 0.5 })
-      }
+      // Circle with M
+      g.moveTo(-40, 0).lineTo(-20, 0).stroke({ color: strokeCol, width: SW })
+      g.circle(0, 0, 20).stroke({ color: strokeCol, width: SW })
+      if (lit) g.circle(0, 0, 20).fill({ color: col.glow, alpha: 0.1 })
+      g.moveTo(20, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
       break
     }
     default: {
-      g.circle(0, 0, 22).fill(col.primary)
-      g.circle(0, 0, 14).fill(col.secondary)
+      // Junction dot
+      g.circle(0, 0, 6).fill(strokeCol)
+      g.moveTo(-40, 0).lineTo(-6, 0).stroke({ color: strokeCol, width: SW })
+      g.moveTo(6, 0).lineTo(40, 0).stroke({ color: strokeCol, width: SW })
       break
     }
   }
 
   if (lm.fault === 'short_circuit') {
-    g.rect(-44, -64, 88, 98).stroke({ color: 0xff0000, width: 4 })
-  } else if (lm.fault === 'open_circuit') {
-    g.moveTo(-18, -52).lineTo(4, 0).lineTo(-4, 0).lineTo(18, 52).stroke({ color: 0x888888, width: 3 })
+    g.circle(0, 0, 44).stroke({ color: 0xff0000, width: 3 })
   }
 
   c.addChild(g)
 
+  // "M" text for motor (drawn separately since Graphics can't do text)
+  if (lm.type === 'motor') {
+    const mText = new PIXI.Text({
+      text: 'M',
+      style: { fontFamily: 'monospace', fontSize: 18, fill: strokeCol, fontWeight: 'bold' },
+    })
+    mText.anchor.set(0.5)
+    mText.y = 1
+    c.addChild(mText)
+  }
+
+  // "+" and "−" labels for battery
+  if (lm.type === 'battery') {
+    const plus = new PIXI.Text({ text: '+', style: { fontFamily: 'monospace', fontSize: 12, fill: strokeCol } })
+    plus.anchor.set(0.5)
+    plus.x = -14; plus.y = -30
+    c.addChild(plus)
+    const minus = new PIXI.Text({ text: '−', style: { fontFamily: 'monospace', fontSize: 12, fill: strokeCol } })
+    minus.anchor.set(0.5)
+    minus.x = 16; minus.y = -30
+    c.addChild(minus)
+  }
+
+  // Label below
   const labelText = new PIXI.Text({
-    text: lm.label.slice(0, 12).toUpperCase(),
+    text: lm.label.slice(0, 14).toUpperCase(),
     style: { fontFamily: 'monospace', fontSize: 10, fill: 0xbbbbbb, align: 'center' },
   })
   labelText.anchor.set(0.5, 0)
-  labelText.y = 36
+  labelText.y = 32
   c.addChild(labelText)
 
+  // Value below label
   if (lm.value !== undefined && lm.value !== null) {
     const valText = new PIXI.Text({
       text: fmtValue(lm.type, lm.value),
-      style: { fontFamily: 'monospace', fontSize: 9, fill: 0x777777, align: 'center' },
+      style: { fontFamily: 'monospace', fontSize: 10, fill: lit ? col.glow : 0x888888, align: 'center', fontWeight: 'bold' },
     })
     valText.anchor.set(0.5, 0)
-    valText.y = 49
+    valText.y = 44
     c.addChild(valText)
   }
 
@@ -427,46 +594,55 @@ function drawLandmarksLayer(PIXI: any, container: any, landmarks: LandmarkData[]
   for (const lm of landmarks) container.addChild(drawLandmark(PIXI, lm))
 }
 
-// ─── Hero sprite ──────────────────────────────────────────────────────────────
-function buildHeroGfx(PIXI: any): any {
+// ─── Hero sprite (two walking frames) ─────────────────────────────────────────
+function buildHeroFrame(PIXI: any, frame: 0 | 1): any {
   const g = new PIXI.Graphics()
-  // Boots
-  g.rect(-8, 12, 7, 5).fill(0x3a1e00)
-  g.rect(1, 12, 7, 5).fill(0x3a1e00)
-  // Legs
-  g.rect(-8, 0, 7, 13).fill(0x3b1d6e)
-  g.rect(1, 0, 7, 13).fill(0x3b1d6e)
-  // Belt
+  if (frame === 0) {
+    g.rect(-10, 10, 7, 7).fill(0x3a1e00)
+    g.rect(3, 12, 7, 5).fill(0x3a1e00)
+    g.rect(-10, 0, 7, 11).fill(0x3b1d6e)
+    g.rect(3, 2, 7, 11).fill(0x3b1d6e)
+  } else {
+    g.rect(-8, 12, 7, 5).fill(0x3a1e00)
+    g.rect(1, 10, 7, 7).fill(0x3a1e00)
+    g.rect(-8, 2, 7, 11).fill(0x3b1d6e)
+    g.rect(1, 0, 7, 11).fill(0x3b1d6e)
+  }
   g.rect(-5, -1, 10, 4).fill(0xf59e0b)
-  // Body
   g.rect(-9, -16, 18, 17).fill(0x6b21a8)
-  // Shoulders
   g.rect(-13, -16, 5, 7).fill(0x7a2bbf)
   g.rect(8, -16, 5, 7).fill(0x7a2bbf)
-  // Arms
-  g.rect(-12, -10, 4, 9).fill(0x6b21a8)
-  g.rect(8, -10, 4, 9).fill(0x6b21a8)
-  // Hands
+  if (frame === 0) {
+    g.rect(-12, -12, 4, 11).fill(0x6b21a8)
+    g.rect(8, -8, 4, 9).fill(0x6b21a8)
+  } else {
+    g.rect(-12, -8, 4, 9).fill(0x6b21a8)
+    g.rect(8, -12, 4, 11).fill(0x6b21a8)
+  }
   g.rect(-12, -2, 4, 5).fill(0xf4b87a)
   g.rect(8, -2, 4, 5).fill(0xf4b87a)
-  // Neck
   g.rect(-3, -18, 6, 3).fill(0xf4b87a)
-  // Head
   g.rect(-7, -30, 14, 13).fill(0xf4b87a)
-  // Hair
   g.rect(-7, -30, 14, 4).fill(0xc8860a)
   g.rect(-9, -28, 3, 8).fill(0xc8860a)
   g.rect(6, -28, 3, 8).fill(0xc8860a)
-  // Eyes
   g.rect(-5, -23, 3, 3).fill(0x1a1a88)
   g.rect(2, -23, 3, 3).fill(0x1a1a88)
-  // Mouth
   g.rect(-3, -18, 6, 2).fill(0xcc7755)
-  // Sword
   g.rect(12, -24, 3, 26).fill(0xdddddd)
   g.rect(8, -26, 10, 4).fill(0xaa8800)
   g.rect(13, -28, 2, 5).fill(0xdddddd)
   return g
+}
+
+function buildHeroGfx(PIXI: any): { container: any; frames: any[] } {
+  const container = new PIXI.Container()
+  const f0 = buildHeroFrame(PIXI, 0)
+  const f1 = buildHeroFrame(PIXI, 1)
+  f1.visible = false
+  container.addChild(f0)
+  container.addChild(f1)
+  return { container, frames: [f0, f1] }
 }
 
 // ─── Landmark animation ───────────────────────────────────────────────────────
@@ -502,7 +678,7 @@ function updateParticles(PIXI: any, container: any, state: PixiState): void {
   while (state.particles.length < wantedCount) {
     state.particles.push({
       t: Math.random(),
-      speed: 0.0003 + Math.random() * 0.0004,
+      speed: 0.0006 + Math.random() * 0.0008,
       color: scene.biome === 'lava' ? 0xff4400 : scene.biome === 'void' ? 0x8844ff : 0xffd700,
     })
   }
@@ -510,7 +686,7 @@ function updateParticles(PIXI: any, container: any, state: PixiState): void {
 
   const g = new PIXI.Graphics()
   for (const p of state.particles) {
-    p.t = (p.t + p.speed * (scene.heroSpeed / 60)) % 1
+    p.t = (p.t + p.speed * (scene.heroSpeed / 100)) % 1
     const segT = p.t * pathSegments
     const segIdx = Math.min(pathSegments - 1, Math.floor(segT))
     const segFrac = segT - segIdx
@@ -520,6 +696,80 @@ function updateParticles(PIXI: any, container: any, state: PixiState): void {
     g.circle(px, py, 4).fill({ color: p.color, alpha: 0.85 })
   }
   container.addChild(g)
+}
+
+// ─── Speech bubble ────────────────────────────────────────────────────────────
+function drawSpeechBubble(PIXI: any, container: any, text: string, heroX: number, heroY: number): void {
+  container.removeChildren()
+  if (!text) return
+
+  const PADDING = 12
+  const TAIL_H = 10
+  const MAX_W = 200
+
+  // Text first to measure
+  const txt = new PIXI.Text({
+    text,
+    style: {
+      fontFamily: '"Press Start 2P", "Courier New", monospace',
+      fontSize: 8,
+      fill: 0xe2e8f0,
+      align: 'left',
+      lineHeight: 14,
+      wordWrap: true,
+      wordWrapWidth: MAX_W - PADDING * 2,
+    },
+  })
+
+  const bubbleW = Math.min(MAX_W, txt.width + PADDING * 2)
+  const bubbleH = txt.height + PADDING * 2
+
+  const g = new PIXI.Graphics()
+  // Bubble body
+  g.roundRect(-bubbleW / 2, -bubbleH - TAIL_H, bubbleW, bubbleH, 6)
+    .fill({ color: 0x0f172a, alpha: 0.92 })
+  g.roundRect(-bubbleW / 2, -bubbleH - TAIL_H, bubbleW, bubbleH, 6)
+    .stroke({ color: 0x475569, width: 1.5 })
+  // Tail
+  g.poly([
+    -6, -TAIL_H,
+    6, -TAIL_H,
+    0, 2,
+  ]).fill({ color: 0x0f172a, alpha: 0.92 })
+
+  txt.x = -bubbleW / 2 + PADDING
+  txt.y = -bubbleH - TAIL_H + PADDING
+
+  container.addChild(g)
+  container.addChild(txt)
+
+  // Position above hero
+  container.x = heroX
+  container.y = heroY - 40
+}
+
+// ─── Voltage drop popup (floating "−X.X V" when hero passes a resistor) ──────
+function drawVoltageDropPopup(PIXI: any, state: PixiState): void {
+  const container = state.voltageDropPopupContainer
+  container.removeChildren()
+  if (!state.voltageDropPopup) return
+  const pop = state.voltageDropPopup
+  const txt = new PIXI.Text({
+    text: pop.text,
+    style: {
+      fontFamily: 'monospace',
+      fontSize: 14,
+      fill: 0xffaa44,
+      fontWeight: 'bold',
+    },
+  })
+  txt.anchor.set(0.5)
+  txt.x = 0
+  txt.y = 0
+  container.x = state.heroContainer.x
+  container.y = state.heroContainer.y - 58 + pop.yOffset
+  container.alpha = Math.max(0, 1 - pop.ageMs / 2000)
+  container.addChild(txt)
 }
 
 // ─── Day/night ────────────────────────────────────────────────────────────────
@@ -536,11 +786,28 @@ function updateDayNight(PIXI: any, overlay: any, elapsed: number, app: any): voi
   if (alpha > 0.001) overlay.rect(0, 0, W, H).fill({ color, alpha })
 }
 
-// ─── Hero movement ────────────────────────────────────────────────────────────
-function updateHero(state: PixiState, deltaMS: number): void {
+// ─── Hero movement (step-by-step with story pauses) ───────────────────────────
+function updateHero(state: PixiState, deltaMS: number, addChatEntry: (text: string, type: ChatEntry['type']) => void): void {
   const scene = state.currentScene
   if (!scene || scene.isEmpty || state.heroPath.length < 2) return
-  if (state.heroPauseMs > 0) { state.heroPauseMs -= deltaMS; return }
+  if (!scene.isClosedCircuit) return
+
+  // Handle skip
+  if (state.skipRequested && state.heroPauseMs > 0) {
+    state.heroPauseMs = 0
+    state.currentStoryLandmark = null
+    state.skipRequested = false
+    return
+  }
+  state.skipRequested = false
+
+  if (state.heroPauseMs > 0) {
+    state.heroPauseMs -= deltaMS
+    if (state.heroPauseMs <= 0) {
+      state.currentStoryLandmark = null
+    }
+    return
+  }
 
   const pathLen = state.heroPath.length - 1
   const segIdx = state.heroPathIdx % pathLen
@@ -557,20 +824,45 @@ function updateHero(state: PixiState, deltaMS: number): void {
   const step = (scene.heroSpeed * resistScale * deltaMS) / 1000 / dist
   state.heroProgress += step
 
+  // Toggle walking frame
+  state.heroFrameTimer += deltaMS
+  if (state.heroFrameTimer >= 180) {
+    state.heroFrameTimer = 0
+    state.heroFrameIdx = 1 - state.heroFrameIdx
+    for (let fi = 0; fi < state.heroFrames.length; fi++) {
+      state.heroFrames[fi].visible = fi === state.heroFrameIdx
+    }
+  }
+
   if (state.heroProgress >= 1) {
     state.heroProgress = 0
     const nextIdx = (state.heroPathIdx + 1) % pathLen
     state.heroPathIdx = nextIdx
     const nextPt = state.heroPath[nextIdx]
-    if (nextPt.isCapacitor) {
+
+    // Story pause at each landmark
+    if (nextPt.landmarkId && !state.visitedLandmarks.has(nextPt.landmarkId)) {
       const lm = scene.landmarks.find(l => l.id === nextPt.landmarkId)
-      state.heroPauseMs = Math.min(3000, (lm?.value ?? 100) * 1.0)
+      if (lm) {
+        state.visitedLandmarks.add(lm.id)
+        state.currentStoryLandmark = lm.id
+        state.heroPauseMs = STORY_PAUSE_MS
+        const story = getPhysicsStory(lm.type, lm.label, lm.value, lm.fault, lm.powered, lm.voltageDrop, state.currentScene?.circuitContext)
+        addChatEntry(story, lm.fault ? 'fault' : 'story')
+        // Small "−X.X V" popup when passing through a resistor
+        if (lm.type === 'resistor' && lm.voltageDrop != null && lm.voltageDrop > 0) {
+          state.voltageDropPopup = { text: `−${Number(lm.voltageDrop).toFixed(1)} V`, yOffset: 0, ageMs: 0 }
+        }
+      }
     }
     return
   }
 
-  state.heroContainer.x = a.x + (b.x - a.x) * state.heroProgress
-  state.heroContainer.y = a.y + (b.y - a.y) * state.heroProgress
+  const baseX = a.x + (b.x - a.x) * state.heroProgress
+  const baseY = a.y + (b.y - a.y) * state.heroProgress
+  const bob = Math.sin(state.elapsed * 0.012) * 3
+  state.heroContainer.x = baseX
+  state.heroContainer.y = baseY + bob
   const dx = b.x - a.x
   if (Math.abs(dx) > 1) state.heroContainer.scale.x = dx > 0 ? 1 : -1
 }
@@ -611,19 +903,13 @@ function buildEmptyScreen(PIXI: any, container: any): void {
   container.addChild(g)
 
   const msg = new PIXI.Text({
-    text: 'DRAW A CIRCUIT\nOR UPLOAD A SCHEMATIC\nTO BEGIN YOUR QUEST',
+    text: 'DRAW A CIRCUIT\nOR UPLOAD A SCHEMATIC\nTO BEGIN YOUR QUEST\n\nCLICK HERO TO ADD COMPONENTS',
     style: { fontFamily: 'monospace', fontSize: 18, fill: 0x8866aa, align: 'center', lineHeight: 32 },
   })
   msg.anchor.set(0.5)
   msg.x = WORLD_W / 2
   msg.y = WORLD_H / 2
   container.addChild(msg)
-
-  const cursor = new PIXI.Graphics()
-  cursor.rect(0, 0, 12, 22).fill(0x8866aa)
-  cursor.x = WORLD_W / 2 + 92
-  cursor.y = WORLD_H / 2 + 16
-  container.addChild(cursor)
 }
 
 // ─── Build full scene ─────────────────────────────────────────────────────────
@@ -632,29 +918,46 @@ function buildScene(PIXI: any, state: PixiState, scene: SceneData, app: any): vo
   state.particles = []
 
   drawTiles(PIXI, state.tilesContainer, scene.biome)
-  const path = buildHeroPath(scene.landmarks)
+  const path = buildHeroPath(scene.landmarks, scene.edges)
   state.heroPath = path
-  drawPathLine(PIXI, state.pathContainer, path, scene.biome)
+  // Only draw path trace when circuit is closed (it forms a real loop)
+  if (scene.isClosedCircuit) {
+    drawPathLine(PIXI, state.pathContainer, path, scene.biome)
+  } else {
+    state.pathContainer.removeChildren()
+  }
 
   if (scene.isEmpty) {
     buildEmptyScreen(PIXI, state.landmarksContainer)
     state.heroContainer.visible = false
-    // Center world on screen
     state.world.x = app.screen.width / 2 - WORLD_W / 2
     state.world.y = app.screen.height / 2 - WORLD_H / 2
   } else {
     state.heroContainer.visible = true
     drawLandmarksLayer(PIXI, state.landmarksContainer, scene.landmarks)
-    const start = path[0]
+    const start = path[0] ?? { x: WORLD_W / 2, y: WORLD_H / 2 }
     state.heroContainer.x = start.x
     state.heroContainer.y = start.y
     state.heroPathIdx = 0
     state.heroProgress = 0
+    state.visitedLandmarks = new Set()
+    state.currentStoryLandmark = null
     state.heroPauseMs = 0
+    // Only pre-pause at first landmark if circuit is closed and ready to move
+    if (scene.isClosedCircuit && start.landmarkId) {
+      const firstLm = scene.landmarks.find(l => l.id === start.landmarkId)
+      if (firstLm) {
+        state.visitedLandmarks.add(firstLm.id)
+        state.currentStoryLandmark = firstLm.id
+        state.heroPauseMs = STORY_PAUSE_MS
+      }
+    }
   }
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+let _chatIdCounter = 0
+
 export default function QuestView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const pixiStateRef = useRef<PixiState | null>(null)
@@ -663,6 +966,72 @@ export default function QuestView() {
 
   const circuitGraph = useCircuitStore(s => s.circuitGraph)
   const simulationState = useCircuitStore(s => s.simulationState)
+  const requestCircuitLoad = useCircuitStore(s => s.requestCircuitLoad)
+  const setCurrentNarration = useCircuitStore(s => s.setCurrentNarration)
+
+  // Chat log state
+  const [chatLog, setChatLog] = useState<ChatEntry[]>([])
+  const [showComponentPicker, setShowComponentPicker] = useState(false)
+  const chatRef = useRef<HTMLDivElement>(null)
+  const onHeroClickRef = useRef<() => void>(() => {})
+
+  const addChatEntry = useCallback((text: string, type: ChatEntry['type']) => {
+    const entry: ChatEntry = { id: ++_chatIdCounter, text, type, timestamp: Date.now() }
+    setChatLog(prev => [...prev.slice(-20), entry])
+    if (type === 'story') setCurrentNarration(text)
+  }, [setCurrentNarration])
+
+  const addChatEntryRef = useRef(addChatEntry)
+  addChatEntryRef.current = addChatEntry
+  onHeroClickRef.current = () => setShowComponentPicker(true)
+
+  // Component picker items
+  const PICKER_ITEMS: { type: ComponentType; label: string; color: string; symbol: string; defaultValue?: number }[] = [
+    { type: 'battery',   label: 'BATTERY',   color: '#22c55e', symbol: '⚡', defaultValue: 9   },
+    { type: 'resistor',  label: 'RESISTOR',  color: '#f59e0b', symbol: 'Ω',  defaultValue: 220 },
+    { type: 'led',       label: 'LED',       color: '#ef4444', symbol: '◐'                      },
+    { type: 'capacitor', label: 'CAPACITOR', color: '#3b82f6', symbol: '||', defaultValue: 100 },
+    { type: 'switch',    label: 'SWITCH',    color: '#f97316', symbol: '/',  defaultValue: 1   },
+    { type: 'motor',     label: 'MOTOR',     color: '#8b5cf6', symbol: 'M'                      },
+    { type: 'ground',    label: 'GROUND',    color: '#94a3b8', symbol: '⏚'                      },
+  ]
+
+  const handlePickComponent = useCallback((type: ComponentType, defaultValue?: number) => {
+    const typeInitial = type.charAt(0).toUpperCase()
+    const same = circuitGraph.components.filter(c => c.type === type && c.label?.startsWith(typeInitial))
+    let maxNum = 0
+    same.forEach(c => {
+      const m = c.label?.match(new RegExp(`^${typeInitial}(\\d+)$`))
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1]))
+    })
+    const newLabel = `${typeInitial}${maxNum + 1}`
+    const positions = circuitGraph.components.map(c => c.position)
+    let x = 200, y = 200
+    if (positions.length > 0) {
+      x = Math.max(...positions.map(p => p.x)) + 160
+      y = positions[0].y
+      if (x > 1200) { x = 100; y = Math.max(...positions.map(p => p.y)) + 120 }
+    }
+    requestCircuitLoad({
+      components: [...circuitGraph.components, {
+        id: `${type}_${Math.random().toString(36).slice(2, 9)}`,
+        type, label: newLabel, value: defaultValue, position: { x, y },
+      }],
+      edges: circuitGraph.edges,
+    })
+    setShowComponentPicker(false)
+  }, [circuitGraph, requestCircuitLoad])
+
+  // Auto-scroll chat
+  useEffect(() => {
+    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
+  }, [chatLog])
+
+  // Skip handler
+  const handleSkip = useCallback(() => {
+    const s = pixiStateRef.current
+    if (s) s.skipRequested = true
+  }, [])
 
   // Keep refs current
   circuitGraphRef.current = circuitGraph
@@ -697,28 +1066,68 @@ export default function QuestView() {
       const particlesContainer = new PIXI.Container()
       const heroContainer = new PIXI.Container()
       const uiContainer = new PIXI.Container()
+      const speechBubbleContainer = new PIXI.Container()
+      const voltageDropPopupContainer = new PIXI.Container()
 
-      world.addChild(tilesContainer, pathContainer, landmarksContainer, particlesContainer, heroContainer)
+      world.addChild(tilesContainer, pathContainer, landmarksContainer, particlesContainer, heroContainer, voltageDropPopupContainer, speechBubbleContainer)
       app.stage.addChild(world)
 
       const dayNightOverlay = new PIXI.Graphics()
       app.stage.addChild(dayNightOverlay)
       app.stage.addChild(uiContainer)
 
-      const heroGfx = buildHeroGfx(PIXI)
-      heroContainer.addChild(heroGfx)
+      const heroResult = buildHeroGfx(PIXI)
+      heroContainer.addChild(heroResult.container)
+      
+      // Make hero interactive for upcoming Voice Agent integration
+      heroContainer.eventMode = 'static'
+      heroContainer.cursor = 'pointer'
+      heroContainer.on('pointerdown', () => {
+        onHeroClickRef.current()
+      })
 
       const state: PixiState = {
-        app, world, heroContainer, dayNightOverlay,
+        app, world, heroContainer, heroFrames: heroResult.frames,
+        heroFrameIdx: 0, heroFrameTimer: 0,
+        speechBubbleContainer,
+        dayNightOverlay,
         pathContainer, landmarksContainer, tilesContainer, particlesContainer,
         uiContainer, currentScene: null,
         heroPath: [], heroPathIdx: 0, heroProgress: 0,
         heroPauseMs: 0, elapsed: 0, animTick: 0, particles: [],
+        visitedLandmarks: new Set(),
+        currentStoryLandmark: null,
+        skipRequested: false,
+        voltageDropPopup: null,
+        voltageDropPopupContainer,
+        heroIntroShown: false,
       }
       pixiStateRef.current = state
 
-      // Build scene with latest values
-      buildScene(PIXI, state, deriveScene(circuitGraphRef.current, simulationStateRef.current), app)
+      // Build scene
+      const scene = deriveScene(circuitGraphRef.current, simulationStateRef.current)
+      buildScene(PIXI, state, scene, app)
+
+      if (!scene.isEmpty) {
+        state.heroIntroShown = true
+        addChatEntryRef.current(
+          '⚡ I AM VOLT!\nAn electron explorer who\ntravels through circuits.\nI power up cities, light LEDs,\nand spin motors across the land!',
+          'story'
+        )
+        if (scene.isClosedCircuit) {
+          addChatEntryRef.current('The circuit is complete!\nLet the journey begin!', 'system')
+          const firstLm = scene.landmarks[0]
+          if (firstLm) {
+            const story = getPhysicsStory(firstLm.type, firstLm.label, firstLm.value, firstLm.fault, firstLm.powered, firstLm.voltageDrop, scene.circuitContext)
+            addChatEntryRef.current(story, firstLm.fault ? 'fault' : 'story')
+          }
+        } else {
+          addChatEntryRef.current(
+            '🔌 The circuit is not yet complete.\nConnect battery → components → ground\nto form a closed loop.\nOnly then will I begin moving!',
+            'system'
+          )
+        }
+      }
 
       // Game loop
       app.ticker.add((ticker: any) => {
@@ -727,14 +1136,34 @@ export default function QuestView() {
         s.elapsed += ticker.deltaMS
         s.animTick += ticker.deltaTime
 
-        updateHero(s, ticker.deltaMS)
+        updateHero(s, ticker.deltaMS, addChatEntryRef.current)
+
+        // Speech bubble
+        if (s.currentScene && !s.currentScene.isEmpty && !s.currentScene.isClosedCircuit) {
+          drawSpeechBubble(PIXI, s.speechBubbleContainer, '⚡ VOLT\nAwaiting a\ncomplete circuit!', s.heroContainer.x, s.heroContainer.y)
+        } else if (s.currentStoryLandmark && s.currentScene) {
+          const lm = s.currentScene.landmarks.find(l => l.id === s.currentStoryLandmark)
+          if (lm) {
+            const story = getPhysicsStory(lm.type, lm.label, lm.value, lm.fault, lm.powered, lm.voltageDrop, s.currentScene?.circuitContext)
+            drawSpeechBubble(PIXI, s.speechBubbleContainer, story, s.heroContainer.x, s.heroContainer.y)
+          }
+        } else {
+          s.speechBubbleContainer.removeChildren()
+        }
+
+        // Voltage drop popup (floating "−X.X V" when passing a resistor)
+        if (s.voltageDropPopup) {
+          s.voltageDropPopup.ageMs += ticker.deltaMS
+          s.voltageDropPopup.yOffset -= 0.7
+          if (s.voltageDropPopup.ageMs > 2200) s.voltageDropPopup = null
+        }
+        drawVoltageDropPopup(PIXI, s)
 
         if (!s.currentScene.isEmpty) {
-          // Smooth camera follow
           const tx = app.screen.width / 2 - s.heroContainer.x
           const ty = app.screen.height / 2 - s.heroContainer.y
-          s.world.x += (tx - s.world.x) * 0.05 * ticker.deltaTime
-          s.world.y += (ty - s.world.y) * 0.05 * ticker.deltaTime
+          s.world.x += (tx - s.world.x) * 0.12 * ticker.deltaTime
+          s.world.y += (ty - s.world.y) * 0.12 * ticker.deltaTime
         }
 
         updateDayNight(PIXI, s.dayNightOverlay, s.elapsed, app)
@@ -757,22 +1186,324 @@ export default function QuestView() {
   useEffect(() => {
     const s = pixiStateRef.current
     if (!s) return
+    setChatLog([])
     import('pixi.js').then(PIXI => {
       const s2 = pixiStateRef.current
       if (!s2) return
       const scene = deriveScene(circuitGraphRef.current, simulationStateRef.current)
       wipeTransition(PIXI, s2.app, () => {
         const s3 = pixiStateRef.current
-        if (s3) buildScene(PIXI, s3, scene, s3.app)
+        if (s3) {
+          buildScene(PIXI, s3, scene, s3.app)
+          if (!scene.isEmpty) {
+            // Show Volt's intro only once
+            if (!s3.heroIntroShown) {
+              s3.heroIntroShown = true
+              addChatEntryRef.current(
+                '⚡ I AM VOLT!\nAn electron explorer who\ntravels through circuits.\nI power up cities, light LEDs,\nand spin motors across the land!',
+                'story'
+              )
+            }
+
+            if (scene.isClosedCircuit) {
+              addChatEntryRef.current('🗺️ Circuit complete! VOLT begins the journey!', 'system')
+              const firstLm = scene.landmarks[0]
+              if (firstLm) {
+                const story = getPhysicsStory(firstLm.type, firstLm.label, firstLm.value, firstLm.fault, firstLm.powered, firstLm.voltageDrop, scene.circuitContext)
+                addChatEntryRef.current(story, firstLm.fault ? 'fault' : 'story')
+              }
+            } else {
+              addChatEntryRef.current(
+                '🔌 Circuit incomplete...\nConnect all parts into a closed loop\n(battery → components → ground).\nI will wait here until it is done!',
+                'system'
+              )
+              // Show specific faults
+              const sim = simulationStateRef.current
+              if (sim && sim.faults.length > 0) {
+                for (const f of sim.faults.slice(0, 3)) {
+                  addChatEntryRef.current(`⚠️ ${f.message}`, 'fault')
+                }
+              }
+            }
+          }
+        }
       })
     })
   }, [simulationState]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isPaused = pixiStateRef.current?.heroPauseMs && pixiStateRef.current.heroPauseMs > 0
+
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-      style={{ background: '#0F0E17' }}
-    />
+    <div className="w-full h-full relative" style={{ background: '#0F0E17' }}>
+      {/* PixiJS canvas */}
+      <div ref={containerRef} className="w-full h-full" />
+
+      {/* Skip button (top-right) */}
+      <button
+        onClick={handleSkip}
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          padding: '6px 14px',
+          background: 'rgba(15, 23, 42, 0.85)',
+          border: '1px solid #475569',
+          borderRadius: 6,
+          color: '#94a3b8',
+          fontSize: 11,
+          fontFamily: '"Courier New", monospace',
+          fontWeight: 700,
+          cursor: 'pointer',
+          zIndex: 10,
+          transition: 'all 0.15s ease',
+          letterSpacing: '0.05em',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#ffd700'; e.currentTarget.style.borderColor = '#ffd700' }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#475569' }}
+      >
+        ▶▶ SKIP
+      </button>
+
+      {/* Minecraft-chat-style retro overlay log (bottom-left) */}
+      <div
+        ref={chatRef}
+        style={{
+          position: 'absolute',
+          bottom: 12,
+          left: 12,
+          maxWidth: 380,
+          maxHeight: 220,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          zIndex: 10,
+          pointerEvents: 'none',
+          // Hide scrollbar
+          scrollbarWidth: 'none',
+          msOverflowStyle: 'none',
+        }}
+      >
+        {chatLog.map((entry, i) => {
+          const age = (Date.now() - entry.timestamp) / 1000
+          const opacity = age > 10 ? Math.max(0.15, 1 - (age - 10) / 8) : 1
+
+          return (
+            <div
+              key={entry.id}
+              style={{
+                background: entry.type === 'fault'
+                  ? 'rgba(127, 29, 29, 0.75)'
+                  : entry.type === 'system'
+                    ? 'rgba(30, 58, 95, 0.75)'
+                    : 'rgba(15, 23, 42, 0.80)',
+                padding: '5px 10px',
+                borderRadius: 4,
+                borderLeft: entry.type === 'fault'
+                  ? '3px solid #ef4444'
+                  : entry.type === 'system'
+                    ? '3px solid #3b82f6'
+                    : '3px solid #ffd700',
+                opacity,
+                transition: 'opacity 0.5s ease',
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: '"Courier New", monospace',
+                  fontSize: 10,
+                  color: entry.type === 'fault'
+                    ? '#fca5a5'
+                    : entry.type === 'system'
+                      ? '#93c5fd'
+                      : '#e2e8f0',
+                  lineHeight: 1.4,
+                  whiteSpace: 'pre-wrap',
+                  letterSpacing: '0.02em',
+                  textShadow: '1px 1px 2px rgba(0,0,0,0.8)',
+                }}
+              >
+                {entry.text}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Component progress + click hint (top-left) */}
+      {circuitGraph.components.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 12,
+            left: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            zIndex: 10,
+          }}
+        >
+          <div style={{ display: 'flex', gap: 4 }}>
+          {circuitGraph.components.map(comp => {
+            const visited = pixiStateRef.current?.visitedLandmarks?.has(comp.id)
+            const isCurrent = pixiStateRef.current?.currentStoryLandmark === comp.id
+            return (
+              <div
+                key={comp.id}
+                title={comp.label ?? comp.type}
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: isCurrent
+                    ? '#ffd700'
+                    : visited
+                      ? '#22c55e'
+                      : '#475569',
+                  border: isCurrent ? '2px solid #fff' : '1px solid #64748b',
+                  transition: 'all 0.3s ease',
+                  boxShadow: isCurrent ? '0 0 8px #ffd700' : 'none',
+                }}
+              />
+            )
+          })}
+          </div>
+          <div style={{
+            fontFamily: 'monospace', fontSize: 9, color: '#334155',
+            cursor: 'pointer',
+          }}
+            onClick={() => setShowComponentPicker(true)}
+          >
+            💡 click hero to add
+          </div>
+        </div>
+      )}
+
+      {/* Faults / Stats overlay (top-right area below skip) */}
+      {simulationState && simulationState.faults.length > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 48,
+            right: 12,
+            background: 'rgba(127, 29, 29, 0.7)',
+            border: '1px solid #991b1b',
+            borderRadius: 6,
+            padding: '6px 10px',
+            maxWidth: 200,
+            zIndex: 10,
+          }}
+        >
+          <div style={{
+            fontFamily: '"Courier New", monospace',
+            fontSize: 9,
+            color: '#fca5a5',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            marginBottom: 4,
+          }}>
+            ⚠ {simulationState.faults.length} FAULT{simulationState.faults.length > 1 ? 'S' : ''}
+          </div>
+          {simulationState.faults.slice(0, 3).map((f, i) => (
+            <div key={i} style={{
+              fontFamily: '"Courier New", monospace',
+              fontSize: 8,
+              color: '#fecaca',
+              lineHeight: 1.3,
+              marginBottom: 2,
+            }}>
+              • {f.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Component Picker Modal — appears when hero is clicked */}
+      {showComponentPicker && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, zIndex: 30,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.65)',
+            backdropFilter: 'blur(3px)',
+          }}
+          onClick={() => setShowComponentPicker(false)}
+        >
+          <div
+            style={{
+              background: '#0f172a',
+              border: '2px solid #ffd700',
+              borderRadius: 10,
+              padding: '20px 24px',
+              minWidth: 340,
+              boxShadow: '0 0 40px rgba(255,215,0,0.2)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{
+              fontFamily: "'Press Start 2P', monospace", fontSize: 8,
+              color: '#ffd700', marginBottom: 6, textAlign: 'center',
+            }}>
+              + ADD COMPONENT
+            </div>
+            <div style={{
+              fontFamily: 'monospace', fontSize: 10, color: '#64748b',
+              textAlign: 'center', marginBottom: 14,
+            }}>
+              Select a component to add to your circuit
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+              {PICKER_ITEMS.map(item => (
+                <button
+                  key={item.type}
+                  onClick={() => handlePickComponent(item.type, item.defaultValue)}
+                  style={{
+                    background: '#0a0e1a',
+                    border: `2px solid ${item.color}44`,
+                    borderRadius: 6,
+                    padding: '10px 6px',
+                    cursor: 'pointer',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+                    transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.borderColor = item.color
+                    e.currentTarget.style.background = `${item.color}18`
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.borderColor = `${item.color}44`
+                    e.currentTarget.style.background = '#0a0e1a'
+                  }}
+                >
+                  <span style={{ fontSize: 20 }}>{item.symbol}</span>
+                  <span style={{ fontFamily: "'Press Start 2P', monospace", fontSize: 5, color: item.color }}>
+                    {item.label}
+                  </span>
+                  {item.defaultValue !== undefined && (
+                    <span style={{ fontFamily: 'monospace', fontSize: 9, color: '#475569' }}>
+                      {item.type === 'battery' ? `${item.defaultValue}V`
+                        : item.type === 'resistor' ? `${item.defaultValue}Ω`
+                        : item.type === 'capacitor' ? `${item.defaultValue}μF`
+                        : item.defaultValue}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div style={{
+              fontFamily: "'Press Start 2P', monospace", fontSize: 5,
+              color: '#334155', textAlign: 'center', marginTop: 14,
+            }}>
+              CLICK OUTSIDE OR PRESS ESC TO CANCEL
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        div::-webkit-scrollbar { display: none; }
+      `}</style>
+    </div>
   )
 }

@@ -24,6 +24,7 @@ interface CircuitStore {
   pendingLoad: CircuitGraph | null
   projectId: string | null
   projectName: string | null
+  currentNarration: string | null
 
   // Canvas-specific additions
   canvasNodes: RFNode[]
@@ -36,6 +37,7 @@ interface CircuitStore {
   setSimulationState: (state: SimulationState | null) => void
   setSelectedComponentId: (id: string | null) => void
   setIsNarrating: (value: boolean) => void
+  setCurrentNarration: (text: string | null) => void
   requestCircuitLoad: (graph: CircuitGraph) => void
   clearPendingLoad: () => void
   setProjectMeta: (id: string | null, name: string | null) => void
@@ -59,6 +61,7 @@ export const useCircuitStore = create<CircuitStore>((set, get) => ({
   pendingLoad: null,
   projectId: null,
   projectName: null,
+  currentNarration: null,
 
   // Canvas-specific initial state
   canvasNodes: [],
@@ -76,6 +79,7 @@ export const useCircuitStore = create<CircuitStore>((set, get) => ({
   setSimulationState: (state) => set({ simulationState: state }),
   setSelectedComponentId: (id) => set({ selectedComponentId: id }),
   setIsNarrating: (value) => set({ isNarrating: value }),
+  setCurrentNarration: (text) => set({ currentNarration: text }),
 
   requestCircuitLoad: (graph) => set({ pendingLoad: graph }),
   clearPendingLoad: () => set({ pendingLoad: null }),

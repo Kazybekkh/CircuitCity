@@ -1,6 +1,26 @@
-import { CircuitGraph } from '../../../shared/types'
+import { CircuitGraph, CircuitComponent, CircuitEdge as FrontendEdge } from '../../../shared/types'
 import { parseCddx } from './cddxParser'
 import { parseSpice } from './spiceParser'
+
+// Backend upload returns { circuitGraph: { nodes, edges }, format, confidence }
+type BackendNode = { id: string; type: string; value?: number | null; position?: { x: number; y: number } }
+type BackendEdge = { id?: string; from: string; to: string }
+type BackendGraph = { nodes?: BackendNode[]; edges?: BackendEdge[]; components?: unknown[] }
+
+const BACKEND_TYPE_TO_FRONTEND: Record<string, CircuitComponent['type']> = {
+  voltageSource: 'battery',
+  currentSource: 'battery',
+  inductor: 'motor',
+  diode: 'led',
+  resistor: 'resistor',
+  capacitor: 'capacitor',
+  led: 'led',
+  switch: 'switch',
+  ground: 'ground',
+  wire: 'wire',
+  motor: 'motor',
+  battery: 'battery',
+}
 
 export type SupportedFormat = 'cddx' | 'spice' | 'image' | 'unknown'
 
@@ -43,6 +63,23 @@ export async function parseCircuitFile(file: File): Promise<CircuitGraph> {
   throw new Error(`Unrecognised file format: ${file.name}. Supported: images (.png, .jpg), CDDX (.cddx), SPICE (.cir, .sp)`)
 }
 
+function backendGraphToFrontend(raw: BackendGraph): CircuitGraph {
+  const nodes = raw.nodes ?? []
+  const rawEdges = raw.edges ?? []
+  const components: CircuitComponent[] = nodes.map((n, i) => ({
+    id: n.id ?? `n${i}`,
+    type: BACKEND_TYPE_TO_FRONTEND[n.type] ?? 'resistor',
+    value: n.value ?? undefined,
+    position: n.position ?? { x: 50 + i * 150, y: 150 },
+  }))
+  const edges: FrontendEdge[] = rawEdges.map((e, i) => ({
+    id: e.id ?? `e${i}`,
+    sourceId: e.from,
+    targetId: e.to,
+  }))
+  return { components, edges }
+}
+
 async function parseImageViaBackend(file: File): Promise<CircuitGraph> {
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'
 
@@ -59,7 +96,19 @@ async function parseImageViaBackend(file: File): Promise<CircuitGraph> {
     throw new Error(body.error || `Server error ${res.status} while parsing image`)
   }
 
-  return res.json()
+  const data = await res.json()
+  const raw: BackendGraph = data.circuitGraph ?? data
+  if (!raw || (raw.nodes == null && raw.components == null)) {
+    throw new Error('Server returned no circuit data.')
+  }
+  // Backend may return nodes/edges (upload API) or already components/edges
+  if (raw.nodes && Array.isArray(raw.nodes)) {
+    return backendGraphToFrontend(raw)
+  }
+  if (raw.components && Array.isArray((raw as { components: unknown[] }).components)) {
+    return raw as unknown as CircuitGraph
+  }
+  throw new Error('Server returned invalid circuit format.')
 }
 
 async function readHead(file: File, bytes: number): Promise<string> {

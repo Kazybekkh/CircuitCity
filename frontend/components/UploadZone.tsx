@@ -31,7 +31,8 @@ export default function UploadZone({ onParsed }: Props) {
 
     try {
       const graph = await parseCircuitFile(file)
-      if (graph.components.length === 0) {
+      const components = graph?.components
+      if (!components || !Array.isArray(components) || components.length === 0) {
         setError('No circuit components found in file.')
         return
       }

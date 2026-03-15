@@ -111,22 +111,22 @@ export function parseCddxXml(xml: string): CircuitGraph {
 
   // Primary: explicit <cns> connections
   let hasExplicitConnections = false
-  for (const [, ids] of connectionBuckets) {
+  connectionBuckets.forEach((ids) => {
     if (ids.length >= 2) hasExplicitConnections = true
     for (let i = 0; i < ids.length - 1; i++) addEdge(ids[i], ids[i + 1])
-  }
+  })
 
   // Fallback: geometry-based connection from wire endpoints
   if (!hasExplicitConnections) {
     // Collect all pin coords for components
     const coordToComps = new Map<string, string[]>()
-    for (const [cid, pins] of pinPositions) {
+    pinPositions.forEach((pins, cid) => {
       for (const p of pins) {
         const k = `${p.x},${p.y}`
         if (!coordToComps.has(k)) coordToComps.set(k, [])
         coordToComps.get(k)!.push(cid)
       }
-    }
+    })
 
     // Wire endpoints
     const wireEndpoints: { x: number; y: number }[][] = []
@@ -158,9 +158,9 @@ export function parseCddxXml(xml: string): CircuitGraph {
     }
 
     // Union all elements sharing coordinates
-    for (const [, ids] of coordToComps) {
+    coordToComps.forEach((ids) => {
       for (let i = 1; i < ids.length; i++) union(ids[0], ids[i])
-    }
+    })
 
     // Union wire endpoints (wire endpoint coords that match component pins)
     for (const [p1, p2] of wireEndpoints) {
@@ -181,9 +181,9 @@ export function parseCddxXml(xml: string): CircuitGraph {
     }
 
     // Chain components in each group
-    for (const [, ids] of groups) {
+    groups.forEach((ids) => {
       for (let i = 0; i < ids.length - 1; i++) addEdge(ids[i], ids[i + 1])
-    }
+    })
   }
 
   return { components, edges }

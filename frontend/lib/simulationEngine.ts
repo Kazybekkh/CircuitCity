@@ -74,7 +74,9 @@ export function simulate(graph: CircuitGraph): SimulationState {
     while (queue.length > 0) {
       const cur = queue.shift()!
       group.add(cur)
-      for (const nb of adj.get(cur) || []) {
+      const neighbors = adj.get(cur)
+      const nbs = neighbors ? Array.from(neighbors) : []
+      for (const nb of nbs) {
         if (!visited.has(nb)) { visited.add(nb); queue.push(nb) }
       }
     }
@@ -90,7 +92,7 @@ export function simulate(graph: CircuitGraph): SimulationState {
     const hasBat = batteries.some(b => group.has(b.id))
     const hasGnd = grounds.some(g => group.has(g.id))
     if (hasBat && hasGnd) {
-      for (const id of group) poweredIds.add(id)
+      Array.from(group).forEach(id => poweredIds.add(id))
       completeGroups.push(group)
     }
   }
@@ -196,7 +198,9 @@ function hasDirectPathToGround(
 
   while (queue.length > 0) {
     const cur = queue.shift()!
-    for (const nb of adj.get(cur) || []) {
+    const neighbors = adj.get(cur)
+    const nbs = neighbors ? Array.from(neighbors) : []
+    for (const nb of nbs) {
       if (visited.has(nb)) continue
       visited.add(nb)
       if (groundIds.has(nb)) return true

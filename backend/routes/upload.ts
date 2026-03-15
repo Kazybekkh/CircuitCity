@@ -174,7 +174,9 @@ Rules:
     }
   }
 
-  layoutGraph(nodes, edges)
+  // Only auto-layout if Gemini didn't supply meaningful positions (all at origin)
+  const allAtOrigin = nodes.every(n => n.position?.x === 0 && n.position?.y === 0)
+  if (allAtOrigin) layoutGraph(nodes, edges)
   return { nodes, edges }
 }
 

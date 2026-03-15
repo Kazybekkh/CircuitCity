@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState, DragEvent } from 'react'
 import { CircuitGraph } from '../../shared/types'
 import { parseCircuitFile, ACCEPTED_EXTENSIONS, FORMAT_DESCRIPTIONS, detectFormat } from '../lib/parsers'
+import { FALLBACK_CIRCUIT } from '../lib/demoCircuits'
 
 interface Props {
   onParsed: (graph: CircuitGraph, filename: string) => void
@@ -13,11 +14,13 @@ export default function UploadZone({ onParsed }: Props) {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [warning, setWarning] = useState<string | null>(null)
   const [lastFile, setLastFile] = useState<string | null>(null)
   const [parsingMode, setParsingMode] = useState<string | null>(null)
 
   const handleFile = useCallback(async (file: File) => {
     setError(null)
+    setWarning(null)
     setLoading(true)
     setLastFile(file.name)
 
@@ -33,12 +36,17 @@ export default function UploadZone({ onParsed }: Props) {
       const graph = await parseCircuitFile(file)
       const components = graph?.components
       if (!components || !Array.isArray(components) || components.length === 0) {
-        setError('No circuit components found in file.')
+        // Gemini returned nothing useful — load fallback
+        setWarning('Gemini could not extract components from the image. Loaded a default circuit instead.')
+        onParsed(FALLBACK_CIRCUIT, file.name)
         return
       }
       onParsed(graph, file.name)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to parse file.')
+      // Any parse / network / Gemini error — load fallback so the user isn't stuck
+      const msg = err instanceof Error ? err.message : 'Failed to parse file.'
+      setWarning(`Could not parse "${file.name}" (${msg}). Loaded a default circuit instead.`)
+      onParsed(FALLBACK_CIRCUIT, file.name)
     } finally {
       setLoading(false)
       setParsingMode(null)
@@ -115,10 +123,17 @@ export default function UploadZone({ onParsed }: Props) {
         />
       </div>
 
-      {/* Error */}
+      {/* Hard error (non-image formats only) */}
       {error && (
         <div className="bg-red-950/50 border border-red-800/60 rounded-lg px-3 py-2 text-xs text-red-300">
           {error}
+        </div>
+      )}
+
+      {/* Soft warning — fallback circuit was loaded */}
+      {warning && (
+        <div className="bg-yellow-950/50 border border-yellow-700/60 rounded-lg px-3 py-2 text-xs text-yellow-300 leading-relaxed">
+          ⚠️ {warning}
         </div>
       )}
 

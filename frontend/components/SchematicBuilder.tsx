@@ -41,6 +41,27 @@ const CONFIGS: Record<CType, { label: string; color: string; symbol: string; def
 
 const PALETTE: CType[] = ['battery', 'resistor', 'led', 'capacitor', 'switch', 'motor', 'ground']
 
+// Map palette/upload types to simulation ComponentType so closed circuit is detected
+const SIM_TYPE_MAP: Record<string, CType> = {
+  voltage_source: 'battery',
+  current_source: 'battery',
+  inductor: 'resistor',
+  diode: 'led',
+  battery: 'battery',
+  resistor: 'resistor',
+  led: 'led',
+  capacitor: 'capacitor',
+  switch: 'switch',
+  motor: 'motor',
+  ground: 'ground',
+  wire: 'wire',
+}
+const VALID_TYPES: CType[] = ['battery', 'wire', 'resistor', 'led', 'capacitor', 'switch', 'ground', 'motor']
+function toSimType(raw: string | undefined): CType {
+  const t = SIM_TYPE_MAP[raw ?? ''] ?? raw
+  return (VALID_TYPES.includes(t as CType) ? t : 'wire') as CType
+}
+
 /* ------------------------------------------------------------------ */
 /*  SVG symbol registry (for export)                                   */
 /* ------------------------------------------------------------------ */
@@ -346,9 +367,9 @@ function BuilderInner() {
     const graph: CircuitGraph = {
       components: nodes.map(n => ({
         id: n.id,
-        type: n.data.componentType,
-        label: n.data.label,
-        value: n.data.value,
+        type: toSimType(n.data?.componentType as string),
+        label: (n.data?.label as string) ?? n.id,
+        value: n.data?.value as number | undefined,
         position: n.position,
       })),
       edges: edges.map(e => ({

@@ -1229,7 +1229,7 @@ export default function QuestView() {
         }
       })
     })
-  }, [simulationState]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [circuitGraph, simulationState]) // Rebuild when circuit or simulation result changes
 
   const isPaused = pixiStateRef.current?.heroPauseMs && pixiStateRef.current.heroPauseMs > 0
 

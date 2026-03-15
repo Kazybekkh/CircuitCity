@@ -8,6 +8,25 @@ export interface DemoCircuit {
   graph: CircuitGraph
 }
 
+// Fallback circuit loaded when Gemini Vision fails to parse an uploaded image
+export const FALLBACK_CIRCUIT: CircuitGraph = {
+  components: [
+    { id: 'fb_bat', type: 'battery', label: 'B1', value: 9, position: { x: 0, y: 120 } },
+    { id: 'fb_r1', type: 'resistor', label: 'R1', value: 100, position: { x: 200, y: 120 } },
+    { id: 'fb_r2', type: 'resistor', label: 'R2', value: 220, position: { x: 400, y: 120 } },
+    { id: 'fb_r3', type: 'resistor', label: 'R3', value: 330, position: { x: 600, y: 120 } },
+    { id: 'fb_r4', type: 'resistor', label: 'R4', value: 470, position: { x: 800, y: 120 } },
+    { id: 'fb_gnd', type: 'ground', label: 'GND', position: { x: 1000, y: 120 } },
+  ],
+  edges: [
+    { id: 'fbe1', sourceId: 'fb_bat', targetId: 'fb_r1' },
+    { id: 'fbe2', sourceId: 'fb_r1', targetId: 'fb_r2' },
+    { id: 'fbe3', sourceId: 'fb_r2', targetId: 'fb_r3' },
+    { id: 'fbe4', sourceId: 'fb_r3', targetId: 'fb_r4' },
+    { id: 'fbe5', sourceId: 'fb_r4', targetId: 'fb_gnd' },
+  ],
+}
+
 export const DEMO_CIRCUITS: DemoCircuit[] = [
   {
     id: 'series_resistors',

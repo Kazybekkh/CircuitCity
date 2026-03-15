@@ -1,0 +1,57 @@
+You are a coding agent working on the `sim` branch of the `circuits-as-a-quest` monorepo. ## Your mission 
+Build a real physics-based circuit simulation engine with a multi-format upload pipeline. No hardcoded 
+values anywhere — all voltages, currents, and component behaviours must be computed from actual circuit 
+topology. ## Stack - Node.js + Express + TypeScript - Mongoose (MongoDB Atlas) - Google Gemini API 
+(Vision + text) - multer (file uploads) ## Repository context The monorepo root is 
+`circuits-as-a-quest/`. Your work lives entirely in: - `backend/routes/simulate.ts` - 
+`backend/routes/upload.ts` - `backend/routes/projects.ts` - `backend/routes/health.ts` - 
+`backend/models/` (Mongoose schemas) - `shared/types/circuit.ts` — define and own this file first ## Step 
+1 — Lock the shared types (do this before anything else) Create `shared/types/circuit.ts` with these 
+interfaces. Other agents depend on this contract: ```ts export type ComponentType =
+  | 'resistor' | 'capacitor' | 'inductor' | 'led' | 'diode' | 'voltageSource' | 'currentSource' | 
+  'switch' | 'ground' | 'wire';
+export interface CircuitNode {
+  id: string; type: ComponentType; value?: number;  // Ohms, Farads, Henries, Volts, Amps isOn?: boolean;  
+  // for switches position?: { x: number; y: number }; voltage?: number;  // populated after simulation 
+  current?: number; power?: number; fault?: 'open' | 'short' | 'overcurrent' | null;
+} export interface CircuitEdge {
+  id: string; from: string; to: string; current?: number; } export interface CircuitGraph { nodes: 
+  CircuitNode[]; edges: CircuitEdge[];
+} export interface SimulationResult {
+  graph: CircuitGraph;  // annotated with voltages, currents, power, faults totalPower: number; faults: 
+  string[];  // human-readable fault descriptions
+} export interface SceneConfig {
+  biome: 'forest' | 'dungeon' | 'desert' | 'arctic' | 'lava' | 'void'; tint: string;  // hex heroSpeed: 
+  number;  // px/sec — proportional to total current narrative: string;  // Gemini-generated quest text 
+  audioUrl?: string; simulationResult: SimulationResult;
+} ``` ## Step 2 — Simulation engine (`/api/simulate`) Implement a proper nodal analysis solver using the 
+Modified Nodal Analysis (MNA) method: - Build the conductance matrix G from all resistors and voltage 
+sources - Apply Kirchhoff's Current Law at each non-reference node - Solve the linear system Gv = i using 
+Gaussian elimination or LU decomposition (no external math libraries — implement from scratch in 
+TypeScript) - Support: resistors, ideal voltage sources, ideal current sources, LEDs (model as fixed 
+forward voltage drop ~2V + series resistance), diodes (simple ideal model), switches (open = infinite 
+resistance, closed = wire) - Post-solve: annotate every node and edge with voltage, current, and power (P 
+= VI) - Fault detection: identify open circuits (infinite resistance path), short circuits 
+(zero-resistance path from + to - of a source), overcurrent (current exceeds component rating if 
+provided) POST `/api/simulate` accepts `{ circuitGraph: CircuitGraph }` and returns `{ simulationResult: 
+SimulationResult }`. ## Step 3 — Upload pipeline (`/api/upload`) Support four upload formats via multer: 
+1. **Image (JPEG/PNG)** — send to Gemini Vision with a structured prompt asking it to return a 
+CircuitGraph JSON. Prompt must specify exact JSON schema and ask Gemini to identify component type, value 
+(if visible), and connections. Parse and validate the response strictly. 2. **KiCad schematic 
+(.kicad_sch)** — parse the S-expression file format. Extract component references (R, C, L, LED, VCC, 
+GND), their values, and wire net connections. Build CircuitGraph from nets. 3. **LTspice netlist (.asc or 
+.net/.cir)** — parse SPICE netlist syntax. Lines starting with R, C, L, V, I define components. Build 
+CircuitGraph from node names. 4. **Generic SPICE netlist (.net, .cir)** — same parser as LTspice. POST 
+`/api/upload` accepts `multipart/form-data` with a `file` field. Returns `{ circuitGraph: CircuitGraph, 
+format: string, confidence: number }`. ## Step 4 — Projects CRUD (`/api/projects`) MongoDB schema for 
+saved projects: ```ts {
+  name: string, circuitGraph: CircuitGraph, sceneConfig: SceneConfig, createdAt: Date, updatedAt: Date } 
+``` Implement GET /api/projects, POST /api/projects, GET /api/projects/:id, DELETE /api/projects/:id. ## 
+Step 5 — SceneConfig derivation After simulation, derive SceneConfig automatically: - Biome selection: if 
+fault='short' → 'lava'; if fault='open' → 'void'; if dominant component is capacitor → 'dungeon'; if 
+high resistance → 'desert'; if LED present → 'arctic'; else → 'forest' - heroSpeed: clamp(totalCurrent 
+* 80, 20, 400) px/sec - tint: map biome to hex colour ## Constraints - Zero hardcoded voltages, currents, 
+or component behaviours - All matrix operations implemented in plain TypeScript — no math.js or 
+numeric.js - Full TypeScript strict mode, no `any` - Comprehensive error handling: malformed uploads 
+return 400 with descriptive errors
+- All routes tested with example circuits (voltage divider, series RC, parallel resistors, LED with current-limiting resistor, short circuit)

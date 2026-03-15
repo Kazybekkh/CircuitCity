@@ -8,6 +8,9 @@ dist/
 .next/
 out/
 build/
+# Un-ignore the Next.js /build route inside the frontend app directory
+!frontend/app/build/
+!frontend/app/build/**
 *.tsbuildinfo
 
 # Environment files (keep .env.example)

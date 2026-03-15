@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express'
-import { CircuitProjectModel } from '../models/CircuitProject'
+import { CircuitProjectNewModel } from '../models/CircuitProjectNew'
+import { CircuitGraph, SceneConfig } from '../../shared/types/circuit'
 
 const router = Router()
 
 // GET /api/projects
 router.get('/', async (_req: Request, res: Response) => {
   try {
-    const projects = await CircuitProjectModel.find().sort({ updatedAt: -1 })
+    const projects = await CircuitProjectNewModel.find().sort({ updatedAt: -1 })
     res.json(projects)
   } catch {
     res.status(500).json({ error: 'Failed to fetch projects' })
@@ -16,29 +17,32 @@ router.get('/', async (_req: Request, res: Response) => {
 // POST /api/projects
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name, graph, simulationState } = req.body
-
-    const faultEntry = simulationState?.faults?.length
-      ? { timestamp: new Date().toISOString(), faults: simulationState.faults }
-      : null
-
-    const project = new CircuitProjectModel({
-      name,
-      graph,
-      simulationState,
-      faultHistory: faultEntry ? [faultEntry] : [],
-    })
+    const { name, circuitGraph, sceneConfig } = req.body as {
+      name: string
+      circuitGraph: CircuitGraph
+      sceneConfig?: SceneConfig
+    }
+    if (!name) {
+      res.status(400).json({ error: 'name is required' })
+      return
+    }
+    if (!circuitGraph || !Array.isArray(circuitGraph.nodes)) {
+      res.status(400).json({ error: 'circuitGraph with nodes array is required' })
+      return
+    }
+    const project = new CircuitProjectNewModel({ name, circuitGraph, sceneConfig })
     const saved = await project.save()
     res.status(201).json(saved)
-  } catch {
-    res.status(400).json({ error: 'Failed to create project' })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    res.status(400).json({ error: `Failed to create project: ${msg}` })
   }
 })
 
 // GET /api/projects/:id
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const project = await CircuitProjectModel.findById(req.params.id)
+    const project = await CircuitProjectNewModel.findById(req.params.id)
     if (!project) { res.status(404).json({ error: 'Project not found' }); return }
     res.json(project)
   } catch {
@@ -46,36 +50,11 @@ router.get('/:id', async (req: Request, res: Response) => {
   }
 })
 
-// PUT /api/projects/:id
-router.put('/:id', async (req: Request, res: Response) => {
-  try {
-    const { name, graph, simulationState } = req.body
-    const update: Record<string, unknown> = {}
-    if (name !== undefined) update.name = name
-    if (graph !== undefined) update.graph = graph
-    if (simulationState !== undefined) update.simulationState = simulationState
-
-    const pushOp: Record<string, unknown> = {}
-    if (simulationState?.faults?.length) {
-      pushOp.faultHistory = { timestamp: new Date().toISOString(), faults: simulationState.faults }
-    }
-
-    const project = await CircuitProjectModel.findByIdAndUpdate(
-      req.params.id,
-      { $set: update, ...(Object.keys(pushOp).length ? { $push: pushOp } : {}) },
-      { new: true },
-    )
-    if (!project) { res.status(404).json({ error: 'Project not found' }); return }
-    res.json(project)
-  } catch {
-    res.status(400).json({ error: 'Failed to update project' })
-  }
-})
-
 // DELETE /api/projects/:id
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
-    await CircuitProjectModel.findByIdAndDelete(req.params.id)
+    const result = await CircuitProjectNewModel.findByIdAndDelete(req.params.id)
+    if (!result) { res.status(404).json({ error: 'Project not found' }); return }
     res.json({ deleted: true })
   } catch {
     res.status(404).json({ error: 'Project not found' })

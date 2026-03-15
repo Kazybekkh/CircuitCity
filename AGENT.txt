@@ -1,104 +1,54 @@
-You are a coding agent working on the `canvas` branch of the `circuits-as-a-quest` monorepo.
-
-## Your mission
-Build an infinite canvas circuit editor — a Tinkercad-style drag-and-drop builder where users can construct circuits from scratch. As the circuit is built, it continuously triggers the sim engine and updates the RPG story in real time. The circuit editor and the RPG view live side by side.
-
-## Stack
-- Next.js 14 (App Router)
-- React Flow 11 (infinite canvas, custom nodes)
-- Zustand (shared with frontend branch via same store shape)
-- Tailwind CSS
-
-## Repository context
-Your work lives in:
-- `frontend/components/SchematicBuilder.tsx`  — the infinite canvas editor
-- `frontend/components/ComponentPalette.tsx`  — draggable component tray
-- `frontend/components/CanvasToolbar.tsx`     — zoom, pan, clear, export controls
-- `frontend/store/circuitStore.ts`            — extend the same Zustand store the frontend branch uses
-- `frontend/lib/reactflow/`                   — custom React Flow node types
-
-## Consume these shared types (read-only):
-`shared/types/circuit.ts` — CircuitGraph, ComponentType
-
-## Step 1 — Extend Zustand store
-Add to the existing CircuitStore (coordinate with frontend agent on the exact interface — do not break their fields):
-```ts
-// Canvas-specific additions
-canvasNodes: RFNode[];          // React Flow nodes
-canvasEdges: RFEdge[];          // React Flow edges
-isDirty: boolean;               // true when canvas has unsaved/unsimulated changes
-setCanvasNodes: (nodes: RFNode[]) => void;
-setCanvasEdges: (edges: RFEdge[]) => void;
-canvasToCircuitGraph: () => CircuitGraph;  // derive CircuitGraph from canvas state
-```
-
-## Step 2 — Component palette
-A vertical tray of draggable circuit components:
-- Resistor, Capacitor, Inductor, LED, Diode, Voltage Source, Current Source, Switch (open/closed toggle), Ground, Wire node
-- Each palette item is a 48x48 pixel art icon matching the RPG landmark it maps to (resistor = swamp icon, LED = bonfire icon, etc.)
-- Drag from palette → drop onto canvas → spawns a React Flow node
-- Show component value input inline on the node (e.g. "1kΩ", "10µF") — editable double-click
-
-## Step 3 — Infinite canvas (React Flow)
-Custom React Flow node types for each ComponentType:
-
-Each node renders as:
-- A pixel-art schematic symbol (standard IEEE symbols, drawn in SVG inside the node)
-- Below it: the component value in monospace text
-- Colour-coded border matching its RPG biome colour
-- On select: shows a right-click context menu with Delete and Edit Value
-
-Wire connections:
-- Standard React Flow edges with custom style: 2px solid, colour = current magnitude (blue=low, yellow=mid, red=high) — colour updates after each simulation
-- Connection handles on all four sides of each node
-
-Canvas features:
-- Infinite pan and zoom (React Flow built-in)
-- Grid snap (16px grid — pixel art aesthetic)
-- Multi-select with shift-click and drag-select
-- Delete selected with Backspace/Delete key
-- Undo/redo with Ctrl+Z / Ctrl+Y (maintain history stack in Zustand)
-- Export canvas as CircuitGraph JSON (download button)
-
-## Step 4 — CircuitGraph derivation
-Implement `canvasToCircuitGraph()` that converts React Flow node/edge state to a valid CircuitGraph:
-- Map each React Flow node to a CircuitNode (id, type, value from label, position)
-- Map each React Flow edge to a CircuitEdge (id, from = source node id, to = target node id)
-- Validate: every circuit must have at least one voltage source and one ground — show inline warning if not
-- Handle floating nodes (nodes with no edges) — mark them as open circuit
-
-## Step 5 — Real-time story updates
-This is the key feature: as the user builds, the RPG story updates itself.
-
-Debounce strategy:
-- On any canvas change (node added/moved/edited, edge connected/deleted) set isDirty=true
-- After 800ms of no further changes, automatically:
-  1. Call canvasToCircuitGraph()
-  2. POST to /api/simulate with the derived graph
-  3. If simulation succeeds, update sceneConfig in the Zustand store
-  4. The QuestView (frontend branch) reacts to the store change and re-renders the RPG scene
-  5. POST to /api/narrate with the new sceneConfig
-  6. ExplanationPanel updates with the new narrative and audio
-
-Show a live status indicator in the canvas toolbar:
-- "Drawing..." (user is placing components)
-- "Simulating..." (waiting for /api/simulate)
-- "Quest updated!" (flash green, 1.5s)
-- "Circuit incomplete" (missing source or ground)
-- "Fault detected" (sim returned a fault — show which component in red)
-
-## Step 6 — Side-by-side layout
-The canvas branch adds a new route: `/build`
-
-Layout at /build:
-- Left 55%: SchematicBuilder (infinite canvas)
-- Right 45%: QuestView + ExplanationPanel (imported from frontend branch components)
-- The two panels are live-synced via Zustand — building on the left instantly affects the RPG on the right
-- Toolbar at the top: component palette, zoom controls, undo/redo, simulate button (manual trigger), save to MongoDB button
-
-## Constraints
-- The canvas must never block the UI thread — debounce all simulation calls
-- React Flow node custom types must be registered before render — no dynamic type registration
-- Wire colours must update after each simulation result — map edge current to colour in the store update
-- All pixel art icons must be SVG (not raster images) — drawn as clean schematic symbols
-- The entire /build route must work without the sim backend running — show a "Sim offline" badge and disable auto-simulate, but canvas editing still works
+You are a coding agent working on the `frontend` branch of the `circuits-as-a-quest` monorepo. ## Your 
+mission Build a beautiful, educational pixel-art RPG interface that visualises circuit simulation results 
+as a living 2D quest world. The hero's journey through the scene must be driven by real physics data from 
+the sim API — not animations on a timer. ## Stack - Next.js 14 (App Router) - PixiJS 7 (canvas renderer) 
+- Tailwind CSS - Zustand (global state) - ElevenLabs API (audio playback) ## Repository context Your work 
+lives in: - `frontend/components/CityView.tsx` — rename to QuestView.tsx - 
+`frontend/components/ExplanationPanel.tsx` - `frontend/components/UploadPanel.tsx` - 
+`frontend/store/circuitStore.ts` — Zustand store - `frontend/app/page.tsx` — main layout - 
+`frontend/lib/api.ts` — typed API client for the backend ## Consume these shared types (read-only, 
+defined by sim agent): `shared/types/circuit.ts` — CircuitGraph, SceneConfig, SimulationResult, 
+ComponentType ## Step 1 — Zustand store ```ts interface CircuitStore {
+  circuitGraph: CircuitGraph | null; sceneConfig: SceneConfig | null; isSimulating: boolean; isNarrating: 
+  boolean; setCircuitGraph: (g: CircuitGraph) => void; setSceneConfig: (s: SceneConfig) => void; 
+  triggerSimulation: () => Promise<void>;  // calls POST /api/simulate triggerNarration: () => 
+  Promise<void>;  // calls POST /api/narrate
+} ``` ## Step 2 — QuestView (PixiJS RPG canvas) Build a PixiJS Application that renders a 2D top-down 
+pixel-art RPG world. **Tilemap system**: Each biome has a tile palette: - forest: green grass tiles, dirt 
+path tiles, tree sprites - dungeon: stone floor, torch wall tiles, shadow corners - desert: sand tiles, 
+cactus sprites, heat shimmer - arctic: ice tiles, snow drift, aurora particle effect - lava: lava flow 
+animated tiles, obsidian rock, ember particles - void: dark void tiles, cracked ground, floating debris 
+**Component → landmark mapping** (consume from SceneConfig): - voltageSource → Hero spawn point 
+(glowing throne) - resistor → Swamp/enemy tile cluster (hero slows — animate speed proportional to 
+resistance) - capacitor → Dungeon cell (hero pauses for RC time constant, then bursts through) - led → 
+Bonfire (lights up and pulses when current > 0) - switch (open) → Raised drawbridge (impassable) - 
+switch (closed) → Lowered drawbridge (passable) - ground → Exit portal (glowing vortex) - fault='short' 
+→ Cursed red path (hero runs uncontrolled) - fault='open' → Broken bridge tile (hero stops, 
+quest-blocked UI) **Hero sprite**: 16x16 pixel art character. Movement speed = sceneConfig.heroSpeed 
+(derived from real current). When hero enters a resistor landmark, reduce speed proportional to 
+resistance value. When hero enters a capacitor landmark, pause for (R*C) seconds then continue. 
+**Camera**: Smooth camera follow on the hero. Tilemap is at minimum 3x the viewport — hero scrolls 
+through a world, not a tiny box. **Day/night cycle**: Ambient light cycles over 60 seconds. Dawn when 
+circuit first powers on, day during normal operation, dusk if current is dropping. ## Step 3 — 
+ExplanationPanel Right-side panel with: - Quest narrative text (sceneConfig.narrative) rendered in a 
+retro pixel font (Press Start 2P from Google Fonts) - Audio player that streams sceneConfig.audioUrl - 
+Key physics facts card: total current, total power, voltage drops across each component — rendered as 
+in-world flavour text ("The Hero carries 0.02A of charge. The Swamp Resistor demands 4.7kΩ toll...") - 
+Component legend: map each component type to its RPG element with a small pixel sprite icon ## Step 4 — 
+UploadPanel Left-side panel with: - File drop zone accepting JPEG, PNG, .kicad_sch, .asc, .net, .cir - On 
+drop: call POST /api/upload → get CircuitGraph → dispatch to store → auto-trigger simulation → 
+auto-trigger narration - Upload progress indicator with retro-style loading bar - Error states shown as 
+in-world dialogue boxes ("The Oracle could not parse your schematic...") - Show parsed component count 
+and format detected after upload ## Step 5 — Main layout (page.tsx) Three-panel layout: - Left (280px): 
+UploadPanel - Centre (flex-1): QuestView canvas - Right (320px): ExplanationPanel - Mobile: stack 
+vertically with canvas first ## Design language - Pixel art aesthetic throughout — use CSS 
+image-rendering: pixelated on all sprites - Background: deep navy (#0F0E17) with subtle scanline overlay 
+- UI panels: dark translucent (#1a1a2e with 85% opacity) with 1px purple border - Typography: Press Start 
+2P for headings/narrative, monospace for data values - Colour palette: purples (#6B21A8, #A855F7), ambers 
+(#F59E0B), teals (#14B8A6) - All transitions are instant or step-function (pixel art — no easing curves 
+except camera follow) ## Constraints - QuestView must respond to sceneConfig changes — when a new 
+simulation arrives, the scene transitions with a screen-wipe effect (vertical pixel wipe, 400ms) - No 
+placeholder animations — hero speed, landmark positions, and all physics-derived visuals must come from 
+real SimulationResult data - Handle loading states gracefully: show a retro "Loading..." sprite while 
+simulation is running
+- The canvas must be responsive — use ResizeObserver to match PixiJS renderer to container

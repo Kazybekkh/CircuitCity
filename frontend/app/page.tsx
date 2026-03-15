@@ -6,7 +6,7 @@ import TopNav from '../components/TopNav'
 import SchematicBuilder from '../components/SchematicBuilder'
 import ExplanationPanel from '../components/ExplanationPanel'
 
-const CityView = dynamic(() => import('../components/CityView'), { ssr: false })
+const QuestView = dynamic(() => import('../components/QuestView'), { ssr: false })
 
 export default function Home() {
   const { activeMode, simulationState } = useCircuitStore()
@@ -30,15 +30,15 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Centre Panel — City View (40%) */}
+        {/* Centre Panel — Quest View (40%) */}
         <section className="w-[40%] flex flex-col border-r border-gray-700">
           <div className="px-4 py-2 bg-gray-800 border-b border-gray-700">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              City View
+              Quest World
             </h2>
           </div>
-          <div className="flex-1 overflow-hidden" style={{ background: '#1a1a2e' }}>
-            <CityView />
+          <div className="flex-1 overflow-hidden" style={{ background: '#0F0E17' }}>
+            <QuestView />
           </div>
         </section>
 

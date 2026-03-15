@@ -81,8 +81,11 @@ async function parseImageWithGemini(imageBuffer: Buffer, mimeType: string): Prom
       return await callGeminiVision(genAI, modelName, imageBuffer, mimeType)
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err))
-      if (lastError.message.includes('429') || lastError.message.includes('quota') || lastError.message.includes('rate')) {
-        console.warn(`Model ${modelName} rate-limited, trying next...`)
+      const msg = lastError.message
+      const isRetryable = msg.includes('429') || msg.includes('quota') || msg.includes('rate')
+        || msg.includes('not found') || msg.includes('404') || msg.includes('invalid') || msg.includes('not supported')
+      if (isRetryable) {
+        console.warn(`Model ${modelName} unavailable (${msg.slice(0, 80)}), trying next...`)
         continue
       }
       throw lastError
@@ -117,8 +120,8 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
 
 Rules:
 - "type" MUST be one of: resistor, capacitor, inductor, led, diode, voltageSource, currentSource, switch, ground, wire
-- For batteries/voltage sources: type="voltageSource", value=voltage in volts
-- For resistors: type="resistor", value=resistance in ohms
+- For batteries/voltage sources: type="voltageSource", value=voltage in volts (e.g. 6.0)
+- For resistors: type="resistor", value=resistance in ohms (e.g. 2.0, 1.0, 3.0)
 - For capacitors: type="capacitor", value=capacitance in Farads
 - For inductors/coils: type="inductor", value=inductance in Henries
 - For LEDs: type="led"
@@ -127,9 +130,9 @@ Rules:
 - For switches: type="switch", isOn=true (closed) or isOn=false (open)
 - For ground symbols: type="ground"
 - For wire junctions: type="wire"
-- Extract ALL components and connections visible
-- Assign sequential positions (x, y) spaced ~150px apart
-- edges list which node ids are connected`
+- Extract ALL components and connections visible. Use numeric values exactly as shown (e.g. 6.0 V, 2.0 Ω, 1.0 Ω).
+- LAYOUT: Use a clean textbook schematic layout like "Figure 1": place voltage source on the left (e.g. x=0), then components in logical order (series then parallel branches). Use orthogonal positions so wires would form 90° angles (e.g. same x for vertical runs, same y for horizontal). Space components 150–200px apart. Preserve series/parallel structure from the diagram.
+- edges: list which node ids are connected (from/to).`
 
   const result = await model.generateContent([prompt, imagePart])
   const text = result.response.text()

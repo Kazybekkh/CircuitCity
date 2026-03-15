@@ -1,0 +1,54 @@
+You are a coding agent working on the `frontend` branch of the `circuits-as-a-quest` monorepo. ## Your 
+mission Build a beautiful, educational pixel-art RPG interface that visualises circuit simulation results 
+as a living 2D quest world. The hero's journey through the scene must be driven by real physics data from 
+the sim API — not animations on a timer. ## Stack - Next.js 14 (App Router) - PixiJS 7 (canvas renderer) 
+- Tailwind CSS - Zustand (global state) - ElevenLabs API (audio playback) ## Repository context Your work 
+lives in: - `frontend/components/CityView.tsx` — rename to QuestView.tsx - 
+`frontend/components/ExplanationPanel.tsx` - `frontend/components/UploadPanel.tsx` - 
+`frontend/store/circuitStore.ts` — Zustand store - `frontend/app/page.tsx` — main layout - 
+`frontend/lib/api.ts` — typed API client for the backend ## Consume these shared types (read-only, 
+defined by sim agent): `shared/types/circuit.ts` — CircuitGraph, SceneConfig, SimulationResult, 
+ComponentType ## Step 1 — Zustand store ```ts interface CircuitStore {
+  circuitGraph: CircuitGraph | null; sceneConfig: SceneConfig | null; isSimulating: boolean; isNarrating: 
+  boolean; setCircuitGraph: (g: CircuitGraph) => void; setSceneConfig: (s: SceneConfig) => void; 
+  triggerSimulation: () => Promise<void>;  // calls POST /api/simulate triggerNarration: () => 
+  Promise<void>;  // calls POST /api/narrate
+} ``` ## Step 2 — QuestView (PixiJS RPG canvas) Build a PixiJS Application that renders a 2D top-down 
+pixel-art RPG world. **Tilemap system**: Each biome has a tile palette: - forest: green grass tiles, dirt 
+path tiles, tree sprites - dungeon: stone floor, torch wall tiles, shadow corners - desert: sand tiles, 
+cactus sprites, heat shimmer - arctic: ice tiles, snow drift, aurora particle effect - lava: lava flow 
+animated tiles, obsidian rock, ember particles - void: dark void tiles, cracked ground, floating debris 
+**Component → landmark mapping** (consume from SceneConfig): - voltageSource → Hero spawn point 
+(glowing throne) - resistor → Swamp/enemy tile cluster (hero slows — animate speed proportional to 
+resistance) - capacitor → Dungeon cell (hero pauses for RC time constant, then bursts through) - led → 
+Bonfire (lights up and pulses when current > 0) - switch (open) → Raised drawbridge (impassable) - 
+switch (closed) → Lowered drawbridge (passable) - ground → Exit portal (glowing vortex) - fault='short' 
+→ Cursed red path (hero runs uncontrolled) - fault='open' → Broken bridge tile (hero stops, 
+quest-blocked UI) **Hero sprite**: 16x16 pixel art character. Movement speed = sceneConfig.heroSpeed 
+(derived from real current). When hero enters a resistor landmark, reduce speed proportional to 
+resistance value. When hero enters a capacitor landmark, pause for (R*C) seconds then continue. 
+**Camera**: Smooth camera follow on the hero. Tilemap is at minimum 3x the viewport — hero scrolls 
+through a world, not a tiny box. **Day/night cycle**: Ambient light cycles over 60 seconds. Dawn when 
+circuit first powers on, day during normal operation, dusk if current is dropping. ## Step 3 — 
+ExplanationPanel Right-side panel with: - Quest narrative text (sceneConfig.narrative) rendered in a 
+retro pixel font (Press Start 2P from Google Fonts) - Audio player that streams sceneConfig.audioUrl - 
+Key physics facts card: total current, total power, voltage drops across each component — rendered as 
+in-world flavour text ("The Hero carries 0.02A of charge. The Swamp Resistor demands 4.7kΩ toll...") - 
+Component legend: map each component type to its RPG element with a small pixel sprite icon ## Step 4 — 
+UploadPanel Left-side panel with: - File drop zone accepting JPEG, PNG, .kicad_sch, .asc, .net, .cir - On 
+drop: call POST /api/upload → get CircuitGraph → dispatch to store → auto-trigger simulation → 
+auto-trigger narration - Upload progress indicator with retro-style loading bar - Error states shown as 
+in-world dialogue boxes ("The Oracle could not parse your schematic...") - Show parsed component count 
+and format detected after upload ## Step 5 — Main layout (page.tsx) Three-panel layout: - Left (280px): 
+UploadPanel - Centre (flex-1): QuestView canvas - Right (320px): ExplanationPanel - Mobile: stack 
+vertically with canvas first ## Design language - Pixel art aesthetic throughout — use CSS 
+image-rendering: pixelated on all sprites - Background: deep navy (#0F0E17) with subtle scanline overlay 
+- UI panels: dark translucent (#1a1a2e with 85% opacity) with 1px purple border - Typography: Press Start 
+2P for headings/narrative, monospace for data values - Colour palette: purples (#6B21A8, #A855F7), ambers 
+(#F59E0B), teals (#14B8A6) - All transitions are instant or step-function (pixel art — no easing curves 
+except camera follow) ## Constraints - QuestView must respond to sceneConfig changes — when a new 
+simulation arrives, the scene transitions with a screen-wipe effect (vertical pixel wipe, 400ms) - No 
+placeholder animations — hero speed, landmark positions, and all physics-derived visuals must come from 
+real SimulationResult data - Handle loading states gracefully: show a retro "Loading..." sprite while 
+simulation is running
+- The canvas must be responsive — use ResizeObserver to match PixiJS renderer to container

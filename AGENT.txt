@@ -1,57 +1,54 @@
-You are a coding agent working on the `sim` branch of the `circuits-as-a-quest` monorepo. ## Your mission 
-Build a real physics-based circuit simulation engine with a multi-format upload pipeline. No hardcoded 
-values anywhere — all voltages, currents, and component behaviours must be computed from actual circuit 
-topology. ## Stack - Node.js + Express + TypeScript - Mongoose (MongoDB Atlas) - Google Gemini API 
-(Vision + text) - multer (file uploads) ## Repository context The monorepo root is 
-`circuits-as-a-quest/`. Your work lives entirely in: - `backend/routes/simulate.ts` - 
-`backend/routes/upload.ts` - `backend/routes/projects.ts` - `backend/routes/health.ts` - 
-`backend/models/` (Mongoose schemas) - `shared/types/circuit.ts` — define and own this file first ## Step 
-1 — Lock the shared types (do this before anything else) Create `shared/types/circuit.ts` with these 
-interfaces. Other agents depend on this contract: ```ts export type ComponentType =
-  | 'resistor' | 'capacitor' | 'inductor' | 'led' | 'diode' | 'voltageSource' | 'currentSource' | 
-  'switch' | 'ground' | 'wire';
-export interface CircuitNode {
-  id: string; type: ComponentType; value?: number;  // Ohms, Farads, Henries, Volts, Amps isOn?: boolean;  
-  // for switches position?: { x: number; y: number }; voltage?: number;  // populated after simulation 
-  current?: number; power?: number; fault?: 'open' | 'short' | 'overcurrent' | null;
-} export interface CircuitEdge {
-  id: string; from: string; to: string; current?: number; } export interface CircuitGraph { nodes: 
-  CircuitNode[]; edges: CircuitEdge[];
-} export interface SimulationResult {
-  graph: CircuitGraph;  // annotated with voltages, currents, power, faults totalPower: number; faults: 
-  string[];  // human-readable fault descriptions
-} export interface SceneConfig {
-  biome: 'forest' | 'dungeon' | 'desert' | 'arctic' | 'lava' | 'void'; tint: string;  // hex heroSpeed: 
-  number;  // px/sec — proportional to total current narrative: string;  // Gemini-generated quest text 
-  audioUrl?: string; simulationResult: SimulationResult;
-} ``` ## Step 2 — Simulation engine (`/api/simulate`) Implement a proper nodal analysis solver using the 
-Modified Nodal Analysis (MNA) method: - Build the conductance matrix G from all resistors and voltage 
-sources - Apply Kirchhoff's Current Law at each non-reference node - Solve the linear system Gv = i using 
-Gaussian elimination or LU decomposition (no external math libraries — implement from scratch in 
-TypeScript) - Support: resistors, ideal voltage sources, ideal current sources, LEDs (model as fixed 
-forward voltage drop ~2V + series resistance), diodes (simple ideal model), switches (open = infinite 
-resistance, closed = wire) - Post-solve: annotate every node and edge with voltage, current, and power (P 
-= VI) - Fault detection: identify open circuits (infinite resistance path), short circuits 
-(zero-resistance path from + to - of a source), overcurrent (current exceeds component rating if 
-provided) POST `/api/simulate` accepts `{ circuitGraph: CircuitGraph }` and returns `{ simulationResult: 
-SimulationResult }`. ## Step 3 — Upload pipeline (`/api/upload`) Support four upload formats via multer: 
-1. **Image (JPEG/PNG)** — send to Gemini Vision with a structured prompt asking it to return a 
-CircuitGraph JSON. Prompt must specify exact JSON schema and ask Gemini to identify component type, value 
-(if visible), and connections. Parse and validate the response strictly. 2. **KiCad schematic 
-(.kicad_sch)** — parse the S-expression file format. Extract component references (R, C, L, LED, VCC, 
-GND), their values, and wire net connections. Build CircuitGraph from nets. 3. **LTspice netlist (.asc or 
-.net/.cir)** — parse SPICE netlist syntax. Lines starting with R, C, L, V, I define components. Build 
-CircuitGraph from node names. 4. **Generic SPICE netlist (.net, .cir)** — same parser as LTspice. POST 
-`/api/upload` accepts `multipart/form-data` with a `file` field. Returns `{ circuitGraph: CircuitGraph, 
-format: string, confidence: number }`. ## Step 4 — Projects CRUD (`/api/projects`) MongoDB schema for 
-saved projects: ```ts {
-  name: string, circuitGraph: CircuitGraph, sceneConfig: SceneConfig, createdAt: Date, updatedAt: Date } 
-``` Implement GET /api/projects, POST /api/projects, GET /api/projects/:id, DELETE /api/projects/:id. ## 
-Step 5 — SceneConfig derivation After simulation, derive SceneConfig automatically: - Biome selection: if 
-fault='short' → 'lava'; if fault='open' → 'void'; if dominant component is capacitor → 'dungeon'; if 
-high resistance → 'desert'; if LED present → 'arctic'; else → 'forest' - heroSpeed: clamp(totalCurrent 
-* 80, 20, 400) px/sec - tint: map biome to hex colour ## Constraints - Zero hardcoded voltages, currents, 
-or component behaviours - All matrix operations implemented in plain TypeScript — no math.js or 
-numeric.js - Full TypeScript strict mode, no `any` - Comprehensive error handling: malformed uploads 
-return 400 with descriptive errors
-- All routes tested with example circuits (voltage divider, series RC, parallel resistors, LED with current-limiting resistor, short circuit)
+You are a coding agent working on the `frontend` branch of the `circuits-as-a-quest` monorepo. ## Your 
+mission Build a beautiful, educational pixel-art RPG interface that visualises circuit simulation results 
+as a living 2D quest world. The hero's journey through the scene must be driven by real physics data from 
+the sim API — not animations on a timer. ## Stack - Next.js 14 (App Router) - PixiJS 7 (canvas renderer) 
+- Tailwind CSS - Zustand (global state) - ElevenLabs API (audio playback) ## Repository context Your work 
+lives in: - `frontend/components/CityView.tsx` — rename to QuestView.tsx - 
+`frontend/components/ExplanationPanel.tsx` - `frontend/components/UploadPanel.tsx` - 
+`frontend/store/circuitStore.ts` — Zustand store - `frontend/app/page.tsx` — main layout - 
+`frontend/lib/api.ts` — typed API client for the backend ## Consume these shared types (read-only, 
+defined by sim agent): `shared/types/circuit.ts` — CircuitGraph, SceneConfig, SimulationResult, 
+ComponentType ## Step 1 — Zustand store ```ts interface CircuitStore {
+  circuitGraph: CircuitGraph | null; sceneConfig: SceneConfig | null; isSimulating: boolean; isNarrating: 
+  boolean; setCircuitGraph: (g: CircuitGraph) => void; setSceneConfig: (s: SceneConfig) => void; 
+  triggerSimulation: () => Promise<void>;  // calls POST /api/simulate triggerNarration: () => 
+  Promise<void>;  // calls POST /api/narrate
+} ``` ## Step 2 — QuestView (PixiJS RPG canvas) Build a PixiJS Application that renders a 2D top-down 
+pixel-art RPG world. **Tilemap system**: Each biome has a tile palette: - forest: green grass tiles, dirt 
+path tiles, tree sprites - dungeon: stone floor, torch wall tiles, shadow corners - desert: sand tiles, 
+cactus sprites, heat shimmer - arctic: ice tiles, snow drift, aurora particle effect - lava: lava flow 
+animated tiles, obsidian rock, ember particles - void: dark void tiles, cracked ground, floating debris 
+**Component → landmark mapping** (consume from SceneConfig): - voltageSource → Hero spawn point 
+(glowing throne) - resistor → Swamp/enemy tile cluster (hero slows — animate speed proportional to 
+resistance) - capacitor → Dungeon cell (hero pauses for RC time constant, then bursts through) - led → 
+Bonfire (lights up and pulses when current > 0) - switch (open) → Raised drawbridge (impassable) - 
+switch (closed) → Lowered drawbridge (passable) - ground → Exit portal (glowing vortex) - fault='short' 
+→ Cursed red path (hero runs uncontrolled) - fault='open' → Broken bridge tile (hero stops, 
+quest-blocked UI) **Hero sprite**: 16x16 pixel art character. Movement speed = sceneConfig.heroSpeed 
+(derived from real current). When hero enters a resistor landmark, reduce speed proportional to 
+resistance value. When hero enters a capacitor landmark, pause for (R*C) seconds then continue. 
+**Camera**: Smooth camera follow on the hero. Tilemap is at minimum 3x the viewport — hero scrolls 
+through a world, not a tiny box. **Day/night cycle**: Ambient light cycles over 60 seconds. Dawn when 
+circuit first powers on, day during normal operation, dusk if current is dropping. ## Step 3 — 
+ExplanationPanel Right-side panel with: - Quest narrative text (sceneConfig.narrative) rendered in a 
+retro pixel font (Press Start 2P from Google Fonts) - Audio player that streams sceneConfig.audioUrl - 
+Key physics facts card: total current, total power, voltage drops across each component — rendered as 
+in-world flavour text ("The Hero carries 0.02A of charge. The Swamp Resistor demands 4.7kΩ toll...") - 
+Component legend: map each component type to its RPG element with a small pixel sprite icon ## Step 4 — 
+UploadPanel Left-side panel with: - File drop zone accepting JPEG, PNG, .kicad_sch, .asc, .net, .cir - On 
+drop: call POST /api/upload → get CircuitGraph → dispatch to store → auto-trigger simulation → 
+auto-trigger narration - Upload progress indicator with retro-style loading bar - Error states shown as 
+in-world dialogue boxes ("The Oracle could not parse your schematic...") - Show parsed component count 
+and format detected after upload ## Step 5 — Main layout (page.tsx) Three-panel layout: - Left (280px): 
+UploadPanel - Centre (flex-1): QuestView canvas - Right (320px): ExplanationPanel - Mobile: stack 
+vertically with canvas first ## Design language - Pixel art aesthetic throughout — use CSS 
+image-rendering: pixelated on all sprites - Background: deep navy (#0F0E17) with subtle scanline overlay 
+- UI panels: dark translucent (#1a1a2e with 85% opacity) with 1px purple border - Typography: Press Start 
+2P for headings/narrative, monospace for data values - Colour palette: purples (#6B21A8, #A855F7), ambers 
+(#F59E0B), teals (#14B8A6) - All transitions are instant or step-function (pixel art — no easing curves 
+except camera follow) ## Constraints - QuestView must respond to sceneConfig changes — when a new 
+simulation arrives, the scene transitions with a screen-wipe effect (vertical pixel wipe, 400ms) - No 
+placeholder animations — hero speed, landmark positions, and all physics-derived visuals must come from 
+real SimulationResult data - Handle loading states gracefully: show a retro "Loading..." sprite while 
+simulation is running
+- The canvas must be responsive — use ResizeObserver to match PixiJS renderer to container

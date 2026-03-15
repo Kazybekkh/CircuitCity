@@ -62,35 +62,6 @@ npm run dev
 
 ---
 
-## Developer Branches
-
-Three feature branches are ready for parallel development:
-
-### `feature/city-renderer` — Person 1: PixiJS City Animation & UI
-
-**Owns:**
-- `frontend/components/CityView.tsx` — animated PixiJS city canvas
-- City entity rendering (power stations, roads, buildings, vehicles)
-- Animation loop, day/night cycle, fault visualisations
-- Overall UI polish and responsive layout
-
-### `feature/simulation-engine` — Person 2: React Flow Builder, Simulation Logic & MongoDB
-
-**Owns:**
-- `frontend/components/SchematicBuilder.tsx` — React Flow drag-and-drop schematic editor
-- `backend/routes/simulate.ts` — circuit simulation algorithm (Kirchhoff's laws, fault detection)
-- `backend/routes/projects.ts` — MongoDB CRUD for saving/loading circuit projects
-- Zustand state wiring between schematic builder and city view
-
-### `feature/ai-pipeline` — Person 3: Python Parsing Service, Gemini Vision + Text, ElevenLabs
-
-**Owns:**
-- `backend/routes/upload.ts` — image ingestion and Gemini Vision parsing to CircuitGraph
-- `backend/routes/narrate.ts` — ElevenLabs TTS from Gemini-generated commentary
-- `frontend/components/ExplanationPanel.tsx` — commentary display and audio playback
-- Optional Python microservice for advanced image pre-processing
-
----
 
 ## API Reference
 
